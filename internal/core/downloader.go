@@ -44,6 +44,13 @@ func NewDownloader(downloadDir string) *Downloader {
 	}
 }
 
+// staleTmpAge is how old a temp file must be before cleanup may reap it. A
+// younger file may belong to an in-flight download — deleting it out from
+// under os.Rename was conversun/fnos-apps#245.
+const staleTmpAge = time.Hour
+
+// CleanupStaleTmpFiles reaps ABANDONED download temp files (older than
+// staleTmpAge). It is safe to run while a download is in flight.
 func (d *Downloader) CleanupStaleTmpFiles() error {
 	entries, err := os.ReadDir(d.downloadDir)
 	if err != nil {
@@ -57,9 +64,17 @@ func (d *Downloader) CleanupStaleTmpFiles() error {
 		if entry.IsDir() {
 			continue
 		}
-		if strings.HasSuffix(entry.Name(), ".fpk.tmp") {
-			_ = os.Remove(filepath.Join(d.downloadDir, entry.Name()))
+		if !strings.HasSuffix(entry.Name(), ".fpk.tmp") {
+			continue
 		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if time.Since(info.ModTime()) < staleTmpAge {
+			continue
+		}
+		_ = os.Remove(filepath.Join(d.downloadDir, entry.Name()))
 	}
 	return nil
 }
@@ -79,7 +94,6 @@ func (d *Downloader) Download(ctx context.Context, req DownloadRequest, progress
 
 	prefixedName := req.AppName + "-" + req.FileName
 	finalPath := filepath.Join(d.downloadDir, prefixedName)
-	tmpPath := finalPath + ".tmp"
 
 	urls := req.URLs
 
@@ -89,6 +103,20 @@ func (d *Downloader) Download(ctx context.Context, req DownloadRequest, progress
 
 	var lastErr error
 	for _, url := range urls {
+		// A unique temp file per attempt: the deterministic finalPath+".tmp"
+		// let any second actor (OS /tmp reaper, stale cleanup, retry) delete
+		// the in-flight file under os.Rename (conversun/fnos-apps#245). The
+		// ".fpk.tmp" suffix is kept so CleanupStaleTmpFiles still matches.
+		tmp, err := os.CreateTemp(d.downloadDir, prefixedName+".*.fpk.tmp")
+		if err != nil {
+			return "", fmt.Errorf("create temp file: %w", err)
+		}
+		tmpPath := tmp.Name()
+		if err := tmp.Close(); err != nil {
+			_ = os.Remove(tmpPath)
+			return "", fmt.Errorf("close temp file: %w", err)
+		}
+
 		if err := d.downloadFromURL(ctx, url, tmpPath, progress); err != nil {
 			lastErr = err
 			_ = os.Remove(tmpPath)
