@@ -249,27 +249,44 @@ func (a *LinuxAppCenter) ListVolumes() ([]VolumeInfo, error) {
 	return volumes, nil
 }
 
-// AppInstallVolume resolves the volume an app currently lives on by reading its
-// /var/apps/<app>/target symlink (-> /volN/@appcenter/<app>) and matching the
-// resolved path against the mounted volumes. This is the CLI-independent source
-// of truth used to pin an update to the app's existing volume instead of a
-// re-resolved global default, which would relocate the app and orphan its data.
-// found is false when the app is not installed or its layout cannot be mapped
-// to a known volume.
+// AppInstallVolume resolves the volume an app currently lives on by probing
+// the app's symlinks under /var/apps/<app> in order: target, var, then meta,
+// matching each resolved path against the mounted volumes. This is the
+// CLI-independent source of truth used to pin an update to the app's existing
+// volume instead of a re-resolved global default, which would relocate the
+// app and orphan its data. found is false when the app is not installed or
+// its layout cannot be mapped to a known volume.
 func (a *LinuxAppCenter) AppInstallVolume(appname string) (int, bool, error) {
 	volumes, err := a.ListVolumes()
 	if err != nil {
 		return 0, false, err
 	}
-	// Prefer the binary target; fall back to the runtime data dir.
-	for _, sub := range []string{"target", "var"} {
-		resolved, err := filepath.EvalSymlinks(filepath.Join("/var/apps", appname, sub))
+	idx, found := appInstallVolume(filepath.Join("/var/apps", appname), volumes)
+	return idx, found, nil
+}
+
+// appInstallVolume probes the app's symlinks in order: target
+// (-> /volN/@appcenter/<app>), var (-> /volN/@appdata/<app>), then meta
+// (-> /volN/@appmeta/<app>), and returns the volume of the first that
+// resolves onto a mounted volume.
+//
+// target stays authoritative for normal apps. meta is the rescue for
+// root-type apps (install_type = root, e.g. nvidia-driver): fnOS installs
+// those to the SYSTEM filesystem (/usr/local/apps/...), so target and var
+// resolve off-volume, and only meta — fnOS's own per-app volume association —
+// still points onto a storage volume. Measured on fnOS 1.2.0203 across 60
+// installed apps: 60/60 have a meta symlink, 60/60 metas resolve onto a
+// /volN, and meta never contradicts an on-volume target
+// (conversun/fnos-apps#254).
+func appInstallVolume(appDir string, volumes []VolumeInfo) (int, bool) {
+	for _, sub := range []string{"target", "var", "meta"} {
+		resolved, err := filepath.EvalSymlinks(filepath.Join(appDir, sub))
 		if err != nil {
 			continue
 		}
 		if idx, ok := volumeIndexForPath(resolved, volumes); ok {
-			return idx, true, nil
+			return idx, true
 		}
 	}
-	return 0, false, nil
+	return 0, false
 }
