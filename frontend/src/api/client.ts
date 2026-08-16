@@ -1,3 +1,5 @@
+import { apiUrl } from './base';
+
 export interface AppInfo {
   appname: string;
   display_name: string;
@@ -74,7 +76,7 @@ export interface AppOperation {
 }
 
 export const fetchApps = async (): Promise<AppsResponse> => {
-  const response = await fetch('/api/apps');
+  const response = await fetch(apiUrl('/api/apps'));
   if (!response.ok) {
     throw new Error(`Failed to fetch apps: ${response.statusText}`);
   }
@@ -82,7 +84,7 @@ export const fetchApps = async (): Promise<AppsResponse> => {
 };
 
 export const fetchRecommended = async (): Promise<RecommendedAppsResponse> => {
-  const response = await fetch('/api/recommended');
+  const response = await fetch(apiUrl('/api/recommended'));
   if (!response.ok) {
     return { apps: [] };
   }
@@ -90,7 +92,7 @@ export const fetchRecommended = async (): Promise<RecommendedAppsResponse> => {
 };
 
 export const triggerCheck = async (): Promise<CheckResponse> => {
-  const response = await fetch('/api/check', {
+  const response = await fetch(apiUrl('/api/check'), {
     method: 'POST',
   });
   if (!response.ok) {
@@ -106,6 +108,13 @@ export interface SSEHandle {
   cancel: () => void;
 }
 
+/**
+ * Stream a POST endpoint's SSE body.
+ *
+ * `url` must already be mount-point resolved by the caller (`apiUrl(...)`).
+ * Resolving it a second time here would double-apply the prefix and produce
+ * `/store/store/api/...` behind a sub-path proxy.
+ */
 function streamSSE(url: string, onEvent: SSECallback): SSEHandle {
   const controller = new AbortController();
 
@@ -212,26 +221,26 @@ export interface WizardItem {
 }
 
 export const fetchWizard = async (appname: string): Promise<AppWizard> => {
-  const r = await fetch(`/api/apps/${appname}/wizard`);
+  const r = await fetch(apiUrl(`/api/apps/${appname}/wizard`));
   if (!r.ok) return { appname, has_wizard: false };
   return r.json();
 };
 
 export const installApp = (appname: string, onEvent: SSECallback, wizard?: WizardParam[]): SSEHandle => {
   const qs = wizard && wizard.length ? `?wizard=${encodeURIComponent(JSON.stringify(wizard))}` : '';
-  return streamSSE(`/api/apps/${appname}/install${qs}`, onEvent);
+  return streamSSE(apiUrl(`/api/apps/${appname}/install${qs}`), onEvent);
 };
 
 export const updateApp = (appname: string, onEvent: SSECallback): SSEHandle => {
-  return streamSSE(`/api/apps/${appname}/update`, onEvent);
+  return streamSSE(apiUrl(`/api/apps/${appname}/update`), onEvent);
 };
 
 export const uninstallApp = (appname: string, onEvent: SSECallback): SSEHandle => {
-  return streamSSE(`/api/apps/${appname}/uninstall`, onEvent);
+  return streamSSE(apiUrl(`/api/apps/${appname}/uninstall`), onEvent);
 };
 
 export const reloadApps = (onEvent: SSECallback): SSEHandle => {
-  return streamSSE('/api/apps/reload', onEvent);
+  return streamSSE(apiUrl('/api/apps/reload'), onEvent);
 };
 
 export interface MirrorOption {
@@ -273,7 +282,7 @@ export interface MirrorCheckResponse {
 
 export const checkMirrors = async (type?: 'github' | 'docker'): Promise<MirrorCheckResponse> => {
   const params = type ? `?type=${type}` : '';
-  const response = await fetch(`/api/mirrors/check${params}`, { method: 'POST' });
+  const response = await fetch(apiUrl(`/api/mirrors/check${params}`), { method: 'POST' });
   if (!response.ok) {
     throw new Error(`Failed to check mirrors: ${response.statusText}`);
   }
@@ -293,7 +302,7 @@ export interface StoreUpdateInfo {
 }
 
 export const fetchSettings = async (): Promise<Settings> => {
-  const response = await fetch('/api/settings');
+  const response = await fetch(apiUrl('/api/settings'));
   if (!response.ok) {
     throw new Error(`Failed to fetch settings: ${response.statusText}`);
   }
@@ -301,7 +310,7 @@ export const fetchSettings = async (): Promise<Settings> => {
 };
 
 export const updateSettings = async (settings: { check_interval_hours: number; mirror: string; docker_mirror: string; custom_github_mirror?: string; custom_docker_mirror?: string; install_volume: number }): Promise<void> => {
-  const response = await fetch('/api/settings', {
+  const response = await fetch(apiUrl('/api/settings'), {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -314,7 +323,7 @@ export const updateSettings = async (settings: { check_interval_hours: number; m
 };
 
 export const fetchStatus = async (): Promise<StatusResponse> => {
-  const response = await fetch('/api/status');
+  const response = await fetch(apiUrl('/api/status'));
   if (!response.ok) {
     throw new Error(`Failed to fetch status: ${response.statusText}`);
   }
@@ -322,7 +331,7 @@ export const fetchStatus = async (): Promise<StatusResponse> => {
 };
 
 export const fetchStoreUpdate = async (): Promise<StoreUpdateInfo> => {
-  const response = await fetch('/api/store-update');
+  const response = await fetch(apiUrl('/api/store-update'));
   if (!response.ok) {
     throw new Error(`Failed to fetch store update info: ${response.statusText}`);
   }
@@ -330,18 +339,18 @@ export const fetchStoreUpdate = async (): Promise<StoreUpdateInfo> => {
 };
 
 export const triggerStoreUpdate = (onEvent: SSECallback): SSEHandle => {
-  return streamSSE('/api/store-update', onEvent);
+  return streamSSE(apiUrl('/api/store-update'), onEvent);
 };
 
 export const ignoreUpdate = async (appname: string): Promise<void> => {
-  const response = await fetch(`/api/apps/${appname}/ignore-update`, { method: 'PUT' });
+  const response = await fetch(apiUrl(`/api/apps/${appname}/ignore-update`), { method: 'PUT' });
   if (!response.ok) {
     throw new Error(`Failed to ignore update: ${response.statusText}`);
   }
 };
 
 export const unignoreUpdate = async (appname: string): Promise<void> => {
-  const response = await fetch(`/api/apps/${appname}/ignore-update`, { method: 'DELETE' });
+  const response = await fetch(apiUrl(`/api/apps/${appname}/ignore-update`), { method: 'DELETE' });
   if (!response.ok) {
     throw new Error(`Failed to unignore update: ${response.statusText}`);
   }
@@ -369,7 +378,7 @@ export interface DiagnosticResponse {
 
 export async function fetchDiagnostic(app: string, step: string, errorMsg: string): Promise<DiagnosticResponse> {
   const params = new URLSearchParams({ step, error: errorMsg });
-  const res = await fetch(`/api/apps/${encodeURIComponent(app)}/diagnostic?${params}`);
+  const res = await fetch(apiUrl(`/api/apps/${encodeURIComponent(app)}/diagnostic?${params}`));
   if (!res.ok) throw new Error(`获取诊断信息失败: ${res.status}`);
   return res.json();
 }

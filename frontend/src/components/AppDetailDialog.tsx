@@ -1,5 +1,6 @@
 import React from 'react';
 import type { AppInfo, AppOperation } from '../api/client';
+import { apiUrl } from '../api/base';
 import {
   Dialog,
   DialogContent,
@@ -206,7 +207,7 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
             asChild
             className="rounded-full px-4"
           >
-            <a href={`/api/apps/${app.appname}/download`} download>
+            <a href={apiUrl(`/api/apps/${app.appname}/download`)} download>
               <Download className="mr-1.5 h-3.5 w-3.5" />
               下载 fpk
             </a>
