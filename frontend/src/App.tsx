@@ -1168,6 +1168,7 @@ const App: React.FC = () => {
         onUpdate={handleUpdate}
         onIgnoreUpdate={handleIgnoreUpdate}
         onUnignoreUpdate={handleUnignoreUpdate}
+        onUninstall={handleUninstall}
         operation={detailApp ? appOperations.get(detailApp.appname) : undefined}
       />
 

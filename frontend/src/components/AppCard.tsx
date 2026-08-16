@@ -14,6 +14,7 @@ import {
   Container,
   X,
   BellOff,
+  Trash2,
 } from 'lucide-react';
 
 interface AppCardProps {
@@ -28,7 +29,7 @@ interface AppCardProps {
   onCancelOp?: (app: AppInfo) => void;
 }
 
-const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, onDetail, onCancelOp, upgradeAllowed = true }) => {
+const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, upgradeAllowed = true }) => {
   const isInstalled = app.installed;
   const canUpdate = isInstalled && app.has_update;
 
@@ -194,6 +195,19 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
             </div>
 
             <div className="flex items-center gap-1.5">
+              {isInstalled && onUninstall && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onUninstall(app)}
+                  disabled={!!operation}
+                  aria-label={`卸载 ${app.display_name}`}
+                  title="卸载"
+                  className="rounded-full h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              )}
               {!isInstalled ? (
                 <Button
                   size="sm"

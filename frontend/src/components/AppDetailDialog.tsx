@@ -24,6 +24,7 @@ import {
   BellOff,
   Bell,
   Loader2,
+  Trash2,
 } from 'lucide-react';
 
 interface AppDetailDialogProps {
@@ -34,6 +35,7 @@ interface AppDetailDialogProps {
   onUpdate: (app: AppInfo) => void;
   onIgnoreUpdate?: (app: AppInfo) => void;
   onUnignoreUpdate?: (app: AppInfo) => void;
+  onUninstall?: (app: AppInfo) => void;
   operation?: AppOperation;
 }
 
@@ -47,7 +49,7 @@ const DetailRow: React.FC<{ icon: React.ElementType; label: string; children: Re
   </div>
 );
 
-const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChange, onInstall, onUpdate, onIgnoreUpdate, onUnignoreUpdate, operation }) => {
+const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChange, onInstall, onUpdate, onIgnoreUpdate, onUnignoreUpdate, onUninstall, operation }) => {
   if (!app) return null;
 
   const isInstalled = app.installed;
@@ -209,6 +211,19 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
               下载 fpk
             </a>
           </Button>
+          {isInstalled && onUninstall && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => { onOpenChange(false); onUninstall(app); }}
+              disabled={!!operation}
+              aria-label={`卸载 ${app.display_name}`}
+              className="rounded-full px-4 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              卸载
+            </Button>
+          )}
           {app.update_ignored && onUnignoreUpdate && (
             <Button
               size="sm"

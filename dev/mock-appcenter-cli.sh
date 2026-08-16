@@ -133,6 +133,20 @@ EOF
 cmd_uninstall() {
     local appname="$1"
     rm -f "$MOCK_STATE_DIR/$appname"
+    # The real appcenter-cli removes the app from /var/apps. The mock used to
+    # drop only the state file, so an "uninstalled" app kept showing up in
+    # `list` and in core.ScanInstalled — which means the uninstall verification
+    # in internal/api/uninstall.go could never pass and the UI could never go
+    # back to 未安装. Match the real behavior and remove the app directory.
+    # The directory name is not always the appname (mock-apps/plex holds
+    # appname = plexmediaserver), so resolve it through the manifest.
+    for manifest in "$MOCK_APPS_DIR"/*/manifest; do
+        [ -f "$manifest" ] || continue
+        found=$(grep '^appname' "$manifest" | cut -d= -f2 | tr -d ' ')
+        if [ "$found" = "$appname" ]; then
+            rm -rf "$(dirname "$manifest")"
+        fi
+    done
     echo "Uninstalled $appname"
 }
 
