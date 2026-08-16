@@ -587,9 +587,9 @@ func (p *installPipeline) dockerPull(ctx context.Context, stream *sseStream, fpk
 	}
 
 	mirror := os.Getenv("DOCKER_MIRROR")
-	var multiRegistry bool
+	pullCfg := config.Config{DockerMirror: config.DefaultDockerMirror}
 	if p.configMgr != nil {
-		multiRegistry = config.IsDockerMirrorMultiRegistry(p.configMgr.Get().DockerMirror)
+		pullCfg = p.configMgr.Get()
 	}
 
 	images := parseDockerImages(string(data), app, mirror)
@@ -609,8 +609,8 @@ func (p *installPipeline) dockerPull(ctx context.Context, stream *sseStream, fpk
 		}
 		_ = stream.sendProgress(progressPayload{Step: "pulling", Progress: 0, Message: msg})
 
-		pullRef := normalizeImageForPull(composeRef, mirror, multiRegistry)
-		if err := p.pullSingleImage(ctx, stream, pullRef, msg); err != nil {
+		pullRef, err := p.pullImageWithFallback(ctx, stream, dockerPullCandidates(composeRef, pullCfg), msg)
+		if err != nil {
 			return err
 		}
 		if pullRef != composeRef {
@@ -622,16 +622,16 @@ func (p *installPipeline) dockerPull(ctx context.Context, stream *sseStream, fpk
 	return nil
 }
 
-func (p *installPipeline) pullSingleImage(ctx context.Context, stream *sseStream, image, message string) error {
+func (p *installPipeline) pullSingleImage(ctx context.Context, stream *sseStream, image, message string) (string, error) {
 	cmd := exec.CommandContext(ctx, "docker", "pull", image)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("Docker 镜像拉取失败: %w", err)
+		return "", fmt.Errorf("Docker 镜像拉取失败: %w", err)
 	}
 	cmd.Stderr = cmd.Stdout
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("Docker 镜像拉取失败: %w", err)
+		return "", fmt.Errorf("Docker 镜像拉取失败: %w", err)
 	}
 
 	var totalLayers, completedLayers int
@@ -664,14 +664,17 @@ func (p *installPipeline) pullSingleImage(ctx context.Context, stream *sseStream
 	}
 
 	if err := cmd.Wait(); err != nil {
+		// Keep the raw wait error alongside the parsed line: the fallback
+// predicate needs "signal: killed" / "context canceled" even when a
+// progress line was the last thing scanned.
 		detail := err.Error()
 		if lastErrLine != "" {
-			detail = lastErrLine
+			detail = lastErrLine + ": " + err.Error()
 		}
-		return fmt.Errorf("Docker 镜像拉取失败: %s\n请尝试在 Docker 设置中更换镜像加速源后重试", detail)
+		return detail, fmt.Errorf("Docker 镜像拉取失败: %s", detail)
 	}
 
-	return nil
+	return "", nil
 }
 
 func parseDockerImages(content string, app core.AppInfo, mirror string) []string {

@@ -888,3 +888,85 @@ func TestChooseInstallRoute(t *testing.T) {
 }
 
 var errSimulatedUpgrade = errors.New("simulated upgrade failure")
+
+// TestDockerPullCandidates locks the per-image fallback chain behind the fix
+// for conversun/fnos-apps#267, #266, #257, #248: the selected mirror's shape
+// comes first, every other real mirror follows with the ref re-prefixed by
+// ITS OWN multi-registry capability (strip the old prefix, apply the new one),
+// and the bare direct ref closes the list.
+func TestDockerPullCandidates(t *testing.T) {
+	t.Run("daocloud multi-registry ref fans out across every mirror", func(t *testing.T) {
+		cfg := config.Config{DockerMirror: "daocloud"}
+		got := dockerPullCandidates("m.daocloud.io/docker.io/xream/sub-store:2.36.35", cfg)
+		want := []string{
+			"m.daocloud.io/docker.io/xream/sub-store:2.36.35", // selected, multi-registry: unchanged
+			"docker.1ms.run/xream/sub-store:2.36.35",          // single-registry mirrors strip docker.io/
+			"docker.m.daocloud.io/xream/sub-store:2.36.35",
+			"hub.rat.dev/xream/sub-store:2.36.35",
+			"docker.1panel.live/xream/sub-store:2.36.35",
+			"dockerproxy.net/xream/sub-store:2.36.35",
+			"registry.cyou/xream/sub-store:2.36.35",
+			"docker.io/xream/sub-store:2.36.35", // direct, always last
+		}
+		if len(got) != len(want) {
+			t.Fatalf("len = %d, want %d: %v", len(got), len(want), got)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("candidates[%d] = %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
+
+	t.Run("single-registry selection starts with its own normalized shape", func(t *testing.T) {
+		cfg := config.Config{DockerMirror: "docker-1ms"}
+		got := dockerPullCandidates("docker.1ms.run/docker.io/xream/sub-store:2.36.35", cfg)
+		if len(got) == 0 {
+			t.Fatal("no candidates")
+		}
+		if got[0] != "docker.1ms.run/xream/sub-store:2.36.35" {
+			t.Errorf("first candidate = %q, want the selected mirror's normalized ref", got[0])
+		}
+		if got[1] != "m.daocloud.io/docker.io/xream/sub-store:2.36.35" {
+			t.Errorf("second candidate = %q, want daocloud's multi-registry shape", got[1])
+		}
+		if got[len(got)-1] != "docker.io/xream/sub-store:2.36.35" {
+			t.Errorf("last candidate = %q, want the direct ref", got[len(got)-1])
+		}
+		seen := map[string]bool{}
+		for _, c := range got {
+			if seen[c] {
+				t.Errorf("duplicate candidate %q in %v", c, got)
+			}
+			seen[c] = true
+		}
+	})
+}
+
+// TestPullRetryPredicate locks which pull failures advance to the next mirror
+// candidate and which abort the whole chain: registry denials (allowlist,
+// access denied) are per-mirror and must fall through, while local fatal
+// conditions (cancellation, disk full, OOM kill) make every further attempt
+// pointless.
+func TestPullRetryPredicate(t *testing.T) {
+	cases := []struct {
+		name      string
+		output    string
+		err       error
+		wantAbort bool
+	}{
+		{"allowlist denial continues to the next mirror", "denied: 这镜像不在白名单. this image is not in the allowlist.", nil, false},
+		{"pull access denied continues to the next mirror", "Error response from daemon: pull access denied for m.daocloud.io/docker.io/xream/sub-store", nil, false},
+		{"context canceled aborts the chain", "context canceled", nil, true},
+		{"disk full aborts the chain", "write /var/lib/docker/tmp: no space left on device", nil, true},
+		{"oom kill aborts the chain", "signal: killed", nil, true},
+		{"canceled ctx error aborts the chain", "", context.Canceled, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isPullAbortError(tc.output, tc.err); got != tc.wantAbort {
+				t.Errorf("isPullAbortError(%q, %v) = %v, want %v", tc.output, tc.err, got, tc.wantAbort)
+			}
+		})
+	}
+}

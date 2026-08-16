@@ -107,6 +107,27 @@ func GitHubFallbackPrefixes(selectedKey string, cfg Config) []string {
 	return prefixes
 }
 
+// DockerFallbackPrefixes mirrors GitHubFallbackPrefixes for docker pulls: the
+// selected mirror first, every other real mirror in declaration order, then a
+// direct pull ("") as the last resort. A mirror-level denial (the image is
+// not in the mirror's allowlist) must never dead-end an install — this chain
+// is what lets the pull fall through to a source that carries the image
+// (conversun/fnos-apps#267, #266, #257, #248).
+func DockerFallbackPrefixes(selectedKey string, cfg Config) []string {
+	prefixes := make([]string, 0, len(dockerMirrors))
+	selected := DockerMirrorPrefix(selectedKey, cfg)
+	prefixes = append(prefixes, selected)
+	for _, m := range dockerMirrors {
+		if m.Key != selectedKey && m.Key != "direct" && m.Key != "custom" && m.URL != "" && m.URL != selected {
+			prefixes = append(prefixes, m.URL)
+		}
+	}
+	if selected != "" {
+		prefixes = append(prefixes, "")
+	}
+	return prefixes
+}
+
 // Config holds the persistent store configuration.
 type Config struct {
 	CheckIntervalHours int      `json:"check_interval_hours"`
