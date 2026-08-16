@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -127,10 +128,16 @@ func (e *DaemonError) Error() string {
 
 // Daemon error codes worth naming.
 const (
-	daemonCodeValidation     = 10030 // malformed request
-	daemonCodePackageMissing = 10100 // package not staged
-	daemonCodeWizardRequired = 19000 // a required wizard field was not supplied
+	daemonCodeValidation       = 10030 // malformed request
+	daemonCodeTransientTimeout = 10050 // daemon-internal timeout, e.g. "failed to get volume info: TRPC read timeout" — the next poll typically succeeds
+	daemonCodePackageMissing   = 10100 // package not staged
+	daemonCodeWizardRequired   = 19000 // a required wizard field was not supplied
 )
+
+// maxConsecutiveTransientPolls bounds how many transient status-poll errors
+// StageFpk rides out before giving up, so a genuinely sick daemon still fails
+// fast instead of spinning until the staging deadline.
+const maxConsecutiveTransientPolls = 5
 
 // StagedPackage describes an fpk the daemon has unpacked and identified.
 type StagedPackage struct {
@@ -175,13 +182,32 @@ func (a *LinuxAppCenter) StageFpk(ctx context.Context, fpkPath string) (*StagedP
 	// Staging is fast (sub-second on a 12 MB fpk) but poll generously; a slow
 	// volume should not look like a failure.
 	deadline := time.Now().Add(3 * time.Minute)
+	transientFailures := 0
 	for time.Now().Before(deadline) {
 		var st stageStatus
-		if err := daemonCall(ctx, routeDownloadStatus, map[string]any{
+		err := daemonCall(ctx, routeDownloadStatus, map[string]any{
 			"downloadTaskId": task.DownloadTaskID,
-		}, &st); err != nil {
-			return nil, fmt.Errorf("查询暂存状态失败: %w", err)
+		}, &st)
+		if err != nil {
+			// A transient blip (10050 / TRPC timeout) must not kill the
+			// whole install — tolerate a bounded number in a row
+			// (conversun/fnos-apps#247). Any other daemon error aborts
+			// immediately, exactly as before.
+			if !isTransientStagePollError(err) {
+				return nil, fmt.Errorf("查询暂存状态失败: %w", err)
+			}
+			transientFailures++
+			if transientFailures >= maxConsecutiveTransientPolls {
+				return nil, fmt.Errorf("查询暂存状态失败: %w（已连续 %d 次瞬时错误，放弃）", err, transientFailures)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Second):
+			}
+			continue
 		}
+		transientFailures = 0
 		if st.Status == daemonStatusSuccess {
 			if st.AppName == "" || st.Version == "" {
 				return nil, fmt.Errorf("暂存完成但 app center 未能识别安装包内容")
@@ -201,6 +227,19 @@ func (a *LinuxAppCenter) StageFpk(ctx context.Context, fpkPath string) (*StagedP
 		}
 	}
 	return nil, fmt.Errorf("暂存安装包超时")
+}
+
+// isTransientStagePollError reports whether a staging-status poll failure is a
+// daemon-internal blip worth retrying: code 10050 (failed to get volume info),
+// or any error whose message carries a TRPC/transport timeout. Every other
+// daemon error is a refusal and must abort staging immediately.
+func isTransientStagePollError(err error) bool {
+	var de *DaemonError
+	if errors.As(err, &de) && de.Code == daemonCodeTransientTimeout {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "TRPC read timeout") || strings.Contains(msg, "timeout")
 }
 
 // wizardInfo is the subset of the info response we act on. It also carries the
