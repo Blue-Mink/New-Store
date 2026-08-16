@@ -3,6 +3,8 @@
 package platform
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -130,9 +132,28 @@ func (a *LinuxAppCenter) extractFpk(fpkPath string) (string, error) {
 	return dir, nil
 }
 
-func (a *LinuxAppCenter) Uninstall(appname string) error {
-	_, err := a.run("uninstall", appname)
-	return err
+// Uninstall removes an app through the app-center daemon's uninstall task
+// channel, which is the only reliable path: `appcenter-cli uninstall`'s
+// pre-flight GET /rpc/v1/uninstall/info hits a daemon that only serves POST,
+// so the CLI aborts 100% of the time on fnOS 1.2.0203 (conversun/fnos-apps#265).
+//
+// Fallback: a daemon business error (code != 0) or a failed daemon task is
+// final — the daemon refused or already acted, so the CLI cannot do better.
+// Only a transport failure (socket unreachable on this build) falls back to
+// the legacy CLI.
+func (a *LinuxAppCenter) Uninstall(ctx context.Context, appname string) error {
+	taskID, err := a.submitUninstall(ctx, appname)
+	if err != nil {
+		var de *DaemonError
+		if errors.As(err, &de) {
+			return fmt.Errorf("卸载失败: %w", err)
+		}
+		if _, cliErr := a.run("uninstall", appname); cliErr != nil {
+			return fmt.Errorf("%w（daemon 通道也不可用: %v）", cliErr, err)
+		}
+		return nil
+	}
+	return a.waitTask(ctx, taskID, "卸载")
 }
 
 func (a *LinuxAppCenter) Start(appname string) error {

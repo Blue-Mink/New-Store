@@ -40,8 +40,8 @@ type AppCenter interface {
 	// survives the caller being killed (used for self-update).
 	InstallLocal(dir string, volume int, detach bool) error
 
-	// Uninstall removes an installed app.
-	Uninstall(appname string) error
+	// Uninstall removes an installed app, preserving the app's user data.
+	Uninstall(ctx context.Context, appname string) error
 
 	// Start starts an installed app.
 	Start(appname string) error

@@ -81,7 +81,7 @@ func (m *MockAppCenter) InstallLocal(dir string, volume int, detach bool) error 
 	return err
 }
 
-func (m *MockAppCenter) Uninstall(appname string) error {
+func (m *MockAppCenter) Uninstall(_ context.Context, appname string) error {
 	_, err := m.run("uninstall", appname)
 	return err
 }

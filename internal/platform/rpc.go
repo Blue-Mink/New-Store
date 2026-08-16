@@ -28,7 +28,10 @@ import (
 // Verified end-to-end on fnOS 1.2.0203: beszel 0.18.7-r1 -> r2 with a canary
 // file in @appdata surviving byte-identical, and the daemon logging
 // class=upgrade rather than a uninstall/install pair.
-const daemonSocket = "/var/run/com.trim.app.center.sock"
+//
+// This is a var, not a const, solely so tests can point the client at a fake
+// daemon on a temp socket. Production code MUST NOT reassign it.
+var daemonSocket = "/var/run/com.trim.app.center.sock"
 
 // Daemon routes, measured. nginx proxies the browser's /app-center/* here
 // unchanged, but these internal /rpc/v1 routes need no session token.
@@ -39,6 +42,7 @@ const (
 	routeUpdateTask     = "/rpc/v1/update/task"
 	routeInstallInfo    = "/rpc/v1/install/info"
 	routeInstallTask    = "/rpc/v1/install/task"
+	routeUninstallTask  = "/rpc/v1/uninstall/task"
 	routeCommonStatus   = "/rpc/v1/common/status"
 )
 
@@ -270,6 +274,27 @@ func (a *LinuxAppCenter) UpgradeFpk(ctx context.Context, fpkPath string, params 
 		return fmt.Errorf("升级失败: %w", err)
 	}
 	return a.waitTask(ctx, task.TaskID, "升级")
+}
+
+// submitUninstall asks the daemon to uninstall an app and returns the task ID.
+//
+// This replaces `appcenter-cli uninstall`, whose pre-flight issues
+// GET /rpc/v1/uninstall/info against a daemon that only serves POST, so the
+// CLI aborts 100% of the time on fnOS 1.2.0203 (conversun/fnos-apps#265).
+// wizard_delete_data is pinned to "false" — what the native Web UI sends — so
+// the app's @appdata always survives an in-store uninstall.
+func (a *LinuxAppCenter) submitUninstall(ctx context.Context, appname string) (string, error) {
+	var task struct {
+		TaskID string `json:"taskId"`
+	}
+	err := daemonCall(ctx, routeUninstallTask, map[string]any{
+		"appname":            appname,
+		"wizard_delete_data": "false",
+	}, &task)
+	if err != nil {
+		return "", err
+	}
+	return task.TaskID, nil
 }
 
 type taskStatus struct {

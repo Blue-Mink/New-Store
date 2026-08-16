@@ -33,7 +33,7 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	stopErr := s.queue.WithCLI(func() error { return s.ac.Stop(appname) })
 
 	_ = stream.sendProgress(progressPayload{Step: "uninstalling", Message: "正在卸载..."})
-	if err := s.queue.WithCLI(func() error { return s.ac.Uninstall(appname) }); err != nil {
+	if err := s.queue.WithCLI(func() error { return s.ac.Uninstall(r.Context(), appname) }); err != nil {
 		if stopErr != nil {
 			_ = stream.sendError(fmt.Sprintf("%v（停止阶段也失败: %v）", err, stopErr))
 			return

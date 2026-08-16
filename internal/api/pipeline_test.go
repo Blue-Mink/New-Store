@@ -101,7 +101,7 @@ func (s *stubAppCenter) InstallLocal(string, int, bool) error {
 	atomic.AddInt32(&s.nInstallLocal, 1)
 	return nil
 }
-func (s *stubAppCenter) Uninstall(string) error { return nil }
+func (s *stubAppCenter) Uninstall(context.Context, string) error { return nil }
 func (s *stubAppCenter) Start(string) error {
 	atomic.AddInt32(&s.nStart, 1)
 	return s.startErr
