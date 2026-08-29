@@ -878,18 +878,9 @@ func (p *installPipeline) runSelfUpdate(ctx context.Context, stream *sseStream, 
 		return
 	}
 
-	if err := p.setDefaultVolume(volume); err != nil {
-		_ = stream.sendError(fmt.Sprintf("无法锁定安装目标卷 vol%d，已中止商店更新以保护现有数据: %v", volume, err))
-		return
-	}
-
-	dir, err := p.extractFpk(fpkPath)
-	if err != nil {
-		_ = stream.sendError(err.Error())
-		return
-	}
-	// dir cleanup is conditional on the InstallLocal outcome below.
-
+	// Announce BEFORE submitting: the daemon kills this process partway through
+	// the upgrade, so this is the last thing the client is guaranteed to see.
+	// The frontend's pollForRestart takes over from here.
 	_ = stream.sendProgress(progressPayload{Step: "self_update", Message: "商店正在重启..."})
 
 	// Wait for the SSE bytes to actually reach the client. See the comment on
@@ -899,27 +890,30 @@ func (p *installPipeline) runSelfUpdate(ctx context.Context, stream *sseStream, 
 	case <-ctx.Done():
 	}
 
-	// Detached: appcenter-cli runs in a new session so it survives this
-	// process being killed during install-local's uninstall phase.
+	// Update through the daemon channel, exactly like every other update.
 	//
-	// Still routed through WithCLI even though it returns immediately: the
-	// scheduler's registry refresh calls List() through the same lock, and the
-	// launch must not interleave with it. cmd.Start() does not wait for the
-	// child, so holding the lock here costs nothing.
+	// This used to fork a detached `install-local` — the uninstall-then-reinstall
+	// path this codebase forbids for app updates (#189) — aimed at the store
+	// itself, where a failed reinstall leaves the user with no store to reinstall
+	// it from. Worse, it did that AFTER requireSafeUpgrade had already confirmed
+	// the safe channel was available.
+	//
+	// Measured on 1.2.0505: the daemon upgrades the store in place, keeps
+	// @appdata byte-identical, and pins the volume from its own record — so the
+	// setDefaultVolume call this path used to need (a global fnOS mutation just
+	// to aim install-local) is gone too. Being a separate process, the daemon
+	// finishes the task after it kills us; waitTask dies with this process, the
+	// operation does not.
 	if err := p.queue.WithCLI(func() error {
-		return p.ac.InstallLocal(dir, volume, true)
+		return p.ac.UpgradeFpk(ctx, fpkPath, nil)
 	}); err != nil {
-		// The fork itself failed - the child never started, so it's safe
-		// (and necessary) to clean up the extracted directory here.
-		log.Printf("runSelfUpdate: InstallLocal launch failed: %v", err)
-		_ = stream.sendError(fmt.Sprintf("商店更新启动失败: %v", err))
-		_ = os.RemoveAll(dir)
+		log.Printf("runSelfUpdate: daemon upgrade failed: %v", err)
+		_ = stream.sendError(fmt.Sprintf("商店更新失败: %v", err))
 		return
 	}
-	// Success path: dir is intentionally NOT cleaned up - the detached child
-	// reads it asynchronously after cmd.Start() returns, and fnOS will kill
-	// this process before any deferred cleanup could run. /tmp is wiped on
-	// reboot.
+	// Reaching here means the daemon completed without killing us — uncommon but
+	// harmless; the frontend is already polling for a restart either way.
+	_ = stream.sendProgress(progressPayload{Step: "done", NewVersion: app.FpkVersion, Message: "操作完成"})
 }
 
 // downloadFpkQuiet fetches an fpk without an SSE stream, for callers that are
