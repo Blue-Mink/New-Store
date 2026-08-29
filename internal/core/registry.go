@@ -16,27 +16,37 @@ const (
 )
 
 type AppInfo struct {
-	AppName           string
-	DisplayName       string
-	Description       string
-	HomepageURL       string
-	UpdatedAt         string
-	ServicePort       int
-	Platform          string
-	Source            string
-	IconURL           string
-	Installed         bool
-	InstalledVersion  string
-	LatestVersion     string
-	ReleaseTag        string
-	FpkVersion        string
-	DownloadURL       string
-	DownloadCount     int
-	AppType           string
-	Category          string
-	Status            AppStatus
-	HasRevisionUpdate bool
-	PostInstallNote   string
+	AppName     string
+	DisplayName string
+	Description string
+	HomepageURL string
+	UpdatedAt   string
+	ServicePort int
+	Platform    string
+	Source      string
+	IconURL     string
+	Installed   bool
+	// InstalledVersion is the installed manifest's `version` field. It is the
+	// UPSTREAM version string and is NOT comparable with LatestVersion: the two
+	// come from different producers and routinely disagree (headscale ships
+	// version=0.29.7 with fpk_version=0.29.3-r3 while the catalog says 0.29.3).
+	// Only the FpkVersion pair below drives the update decision.
+	InstalledVersion string
+	LatestVersion    string
+	ReleaseTag       string
+	// FpkVersion is the CATALOG's package version; InstalledFpkVersion is the
+	// installed package's. This pair is authoritative for both the update
+	// decision and for display. InstalledFpkVersion is empty for packages built
+	// before fpk_version existed, which fall back to the revision heuristic.
+	FpkVersion          string
+	InstalledFpkVersion string
+	DownloadURL         string
+	DownloadCount       int
+	AppType             string
+	Category            string
+	Status              AppStatus
+	HasRevisionUpdate   bool
+	PostInstallNote     string
 }
 
 type Registry struct {
@@ -85,6 +95,7 @@ func (r *Registry) Merge(local []Manifest, remote []source.RemoteApp, installedT
 
 		if installed {
 			app.InstalledVersion = localManifest.Version
+			app.InstalledFpkVersion = localManifest.FpkVersion
 			if app.ServicePort == 0 {
 				app.ServicePort = localManifest.ServicePort
 			}

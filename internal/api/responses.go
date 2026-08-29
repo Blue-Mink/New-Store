@@ -9,21 +9,27 @@ type appResponse struct {
 	Installed        bool   `json:"installed"`
 	InstalledVersion string `json:"installed_version"`
 	LatestVersion    string `json:"latest_version"`
-	AvailableVersion string `json:"available_version,omitempty"`
-	HasUpdate        bool   `json:"has_update"`
-	UpdateIgnored    bool   `json:"update_ignored,omitempty"`
-	Platform         string `json:"platform"`
-	ReleaseURL       string `json:"release_url"`
-	ReleaseNotes     string `json:"release_notes"`
-	Status           string `json:"status"`
-	ServicePort      int    `json:"service_port,omitempty"`
-	Homepage         string `json:"homepage,omitempty"`
-	IconURL          string `json:"icon_url,omitempty"`
-	UpdatedAt        string `json:"updated_at,omitempty"`
-	DownloadCount    int    `json:"download_count"`
-	AppType          string `json:"app_type,omitempty"`
-	Category         string `json:"category,omitempty"`
-	PostInstallNote  string `json:"post_install_note,omitempty"`
+	// InstalledFpkVersion / AvailableVersion are the package versions the update
+	// decision is actually made on. InstalledVersion / LatestVersion are upstream
+	// strings from two different producers and can disagree (headscale reports
+	// installed 0.29.7 against catalog 0.29.3 while both are 0.29.3-rN packages),
+	// so clients should prefer this pair whenever both sides are present.
+	InstalledFpkVersion string `json:"installed_fpk_version,omitempty"`
+	AvailableVersion    string `json:"available_version,omitempty"`
+	HasUpdate           bool   `json:"has_update"`
+	UpdateIgnored       bool   `json:"update_ignored,omitempty"`
+	Platform            string `json:"platform"`
+	ReleaseURL          string `json:"release_url"`
+	ReleaseNotes        string `json:"release_notes"`
+	Status              string `json:"status"`
+	ServicePort         int    `json:"service_port,omitempty"`
+	Homepage            string `json:"homepage,omitempty"`
+	IconURL             string `json:"icon_url,omitempty"`
+	UpdatedAt           string `json:"updated_at,omitempty"`
+	DownloadCount       int    `json:"download_count"`
+	AppType             string `json:"app_type,omitempty"`
+	Category            string `json:"category,omitempty"`
+	PostInstallNote     string `json:"post_install_note,omitempty"`
 }
 
 type appsListResponse struct {

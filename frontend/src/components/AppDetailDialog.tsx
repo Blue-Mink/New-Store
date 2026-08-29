@@ -1,5 +1,6 @@
 import React from 'react';
 import type { AppInfo, AppOperation } from '../api/client';
+import { availableVersionLabel, installedVersionLabel } from '../api/client';
 import { apiUrl } from '../api/base';
 import {
   Dialog,
@@ -142,11 +143,11 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
         <div className="space-y-0">
           <DetailRow icon={Tag} label="版本">
             <div className="flex items-center gap-2 flex-wrap">
-              <span>{isInstalled ? `v${app.installed_version}` : `v${app.latest_version}`}</span>
+              <span>{isInstalled ? `v${installedVersionLabel(app)}` : `v${app.latest_version}`}</span>
               {canUpdate && (
                 <>
                   <span className="text-muted-foreground">→</span>
-                  <span className="text-primary font-medium">v{app.available_version || app.latest_version}</span>
+                  <span className="text-primary font-medium">v{availableVersionLabel(app)}</span>
                 </>
               )}
               {!isInstalled && (

@@ -7,6 +7,14 @@ export interface AppInfo {
   installed: boolean;
   installed_version: string;
   latest_version: string;
+  /**
+   * Package versions. `installed_version` / `latest_version` are UPSTREAM
+   * strings produced by two different sources and can disagree for the same
+   * package (headscale reports installed 0.29.7 against catalog 0.29.3 while
+   * both sides are 0.29.3-rN packages). The fpk pair below is what the backend
+   * actually compares, so prefer it for display.
+   */
+  installed_fpk_version?: string;
   available_version?: string;
   has_update: boolean;
   update_ignored?: boolean;
@@ -23,6 +31,19 @@ export interface AppInfo {
   category?: string;
   post_install_note?: string;
 }
+
+/**
+ * The installed version to SHOW. Prefers the package version the backend
+ * compares on, so it lines up with `available_version` instead of pairing two
+ * unrelated upstream strings. Falls back to the upstream version for packages
+ * built before fpk_version existed.
+ */
+export const installedVersionLabel = (app: AppInfo): string =>
+  app.installed_fpk_version || app.installed_version;
+
+/** The version an update would move the app TO. */
+export const availableVersionLabel = (app: AppInfo): string =>
+  app.available_version || app.latest_version;
 
 export interface AppsResponse {
   apps: AppInfo[];

@@ -1,5 +1,6 @@
 import React from 'react';
 import type { AppInfo, AppOperation } from '../api/client';
+import { availableVersionLabel, installedVersionLabel } from '../api/client';
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -114,12 +115,12 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
             </div>
 
             <div className="flex items-center flex-wrap gap-x-1.5 text-xs text-muted-foreground">
-              <span>v{isInstalled ? app.installed_version : app.latest_version}</span>
+              <span>v{isInstalled ? installedVersionLabel(app) : app.latest_version}</span>
               {canUpdate && (
                 <>
                   <ArrowRight className="h-3 w-3 text-muted-foreground/50" />
                   <span className="text-primary">
-                    v{app.available_version || app.latest_version}
+                    v{availableVersionLabel(app)}
                   </span>
                 </>
               )}
