@@ -35,6 +35,10 @@ type stubAppCenter struct {
 	setVolCalls    []int
 	setVolErr      error
 	upgradeBlocked bool
+	// daemonInstallDown models the daemon's INSTALL channel being unreachable,
+	// independently of upgradeBlocked — they are separate probes so a change to
+	// one cannot reroute the other onto install-local.
+	daemonInstallDown bool
 	// curVol is the volume the stub reports from DefaultVolume(). A successful
 	// SetDefaultVolume updates it; setVolIgnored models the real fnOS defect
 	// where the setter exits 0 but the value never changes.
@@ -106,7 +110,7 @@ func (s *stubAppCenter) Start(string) error {
 	atomic.AddInt32(&s.nStart, 1)
 	return s.startErr
 }
-func (s *stubAppCenter) Stop(string) error      { return nil }
+func (s *stubAppCenter) Stop(string) error { return nil }
 func (s *stubAppCenter) DefaultVolume() (int, error) {
 	if s.getVolErr != nil {
 		return 0, s.getVolErr
@@ -137,6 +141,10 @@ func (s *stubAppCenter) UpgradeCapability() platform.UpgradeCapability {
 		return platform.UpgradeCapability{Allowed: false, PlatformVersion: "1.2.0203", Reason: "该 fnOS 版本更新会删除应用数据"}
 	}
 	return platform.UpgradeCapability{Allowed: true, PlatformVersion: "test"}
+}
+
+func (s *stubAppCenter) DaemonInstallAvailable() bool {
+	return !s.daemonInstallDown
 }
 
 func (s *stubAppCenter) AppInstallVolume(string) (int, bool, error) {
@@ -893,10 +901,10 @@ func TestUpdateUsesDaemonUpgradeNotInstallLocal(t *testing.T) {
 // daemon is unreachable falls back to install-local for a fresh install.
 func TestChooseInstallRoute(t *testing.T) {
 	cases := []struct {
-		name      string
-		opName    string
-		daemonUp  bool
-		want      installRoute
+		name     string
+		opName   string
+		daemonUp bool
+		want     installRoute
 	}{
 		{"update uses the daemon upgrade even when the daemon is down", "update", false, routeDaemonUpgrade},
 		{"update uses the daemon upgrade when the daemon is up", "update", true, routeDaemonUpgrade},

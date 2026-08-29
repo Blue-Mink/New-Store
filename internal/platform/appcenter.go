@@ -72,6 +72,13 @@ type AppCenter interface {
 	// upgrade.go.
 	UpgradeCapability() UpgradeCapability
 
+	// DaemonInstallAvailable reports whether the daemon's INSTALL channel is
+	// reachable, deciding whether a FRESH install goes through the daemon or
+	// falls back to install-local. Kept separate from UpgradeCapability so a
+	// change to the update probe cannot silently reroute installs onto the
+	// destructive path.
+	DaemonInstallAvailable() bool
+
 	// UpgradeFpk upgrades an ALREADY-INSTALLED app in place, preserving its
 	// data. This is deliberately separate from InstallFpk: InstallFpk goes
 	// through install-local, which implements an upgrade as

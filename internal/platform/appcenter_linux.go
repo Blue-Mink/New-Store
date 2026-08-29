@@ -137,16 +137,25 @@ func (a *LinuxAppCenter) extractFpk(fpkPath string) (string, error) {
 // pre-flight GET /rpc/v1/uninstall/info hits a daemon that only serves POST,
 // so the CLI aborts 100% of the time on fnOS 1.2.0203 (conversun/fnos-apps#265).
 //
-// Fallback: a daemon business error (code != 0) or a failed daemon task is
-// final — the daemon refused or already acted, so the CLI cannot do better.
-// Only a transport failure (socket unreachable on this build) falls back to
-// the legacy CLI.
+// Fallback rules, in order of how much we know:
+//   - A daemon business error (code != 0) is final: the daemon refused, so the
+//     CLI cannot do better.
+//   - A dial failure proves the request never left this process, so the legacy
+//     CLI is a safe last resort.
+//   - ANY other transport failure is ambiguous — the daemon may already be
+//     uninstalling. Running the CLI then issues a SECOND uninstall, and the CLI
+//     path does not pin wizard_delete_data=false the way submitUninstall does,
+//     so the retry can take the app's @appdata with it. Refuse instead.
 func (a *LinuxAppCenter) Uninstall(ctx context.Context, appname string) error {
 	taskID, err := a.submitUninstall(ctx, appname)
 	if err != nil {
 		var de *DaemonError
 		if errors.As(err, &de) {
 			return fmt.Errorf("卸载失败: %w", err)
+		}
+		if !errors.Is(err, ErrDaemonUnreachable) {
+			return fmt.Errorf("%w：卸载 %s 的请求可能已经送达 app center（%v）。请勿重复卸载，先在应用中心确认应用当前状态",
+				ErrTaskOutcomeUnknown, appname, err)
 		}
 		if _, cliErr := a.run("uninstall", appname); cliErr != nil {
 			return fmt.Errorf("%w（daemon 通道也不可用: %v）", cliErr, err)

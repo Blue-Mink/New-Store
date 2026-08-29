@@ -665,8 +665,8 @@ func (p *installPipeline) pullSingleImage(ctx context.Context, stream *sseStream
 
 	if err := cmd.Wait(); err != nil {
 		// Keep the raw wait error alongside the parsed line: the fallback
-// predicate needs "signal: killed" / "context canceled" even when a
-// progress line was the last thing scanned.
+		// predicate needs "signal: killed" / "context canceled" even when a
+		// progress line was the last thing scanned.
 		detail := err.Error()
 		if lastErrLine != "" {
 			detail = lastErrLine + ": " + err.Error()
@@ -722,10 +722,11 @@ func normalizeImageForPull(image, mirror string, multiRegistry bool) string {
 
 // installRoute names the channel a given operation installs/upgrades through.
 type installRoute int
+
 const (
 	routeDaemonUpgrade installRoute = iota // update -> daemon upgrade (data-preserving)
-	routeDaemonInstall                       // fresh install -> daemon install
-	routeInstallLocal                        // fresh install, daemon down -> install-local
+	routeDaemonInstall                     // fresh install -> daemon install
+	routeInstallLocal                      // fresh install, daemon down -> install-local
 )
 
 // chooseInstallRoute picks the channel. Updates always take the daemon's
@@ -786,28 +787,32 @@ func (p *installPipeline) runStandard(ctx context.Context, stream *sseStream, op
 	}
 
 	// Updates go through the daemon's own upgrade channel, which preserves
-// @appdata and can roll back. install-local is uninstall-then-reinstall and
-// destroys the app when the reinstall fails — conversun/fnos-apps#189. A
-// failure there must NEVER fall back to it.
-//
-// Fresh installs ALSO go through the daemon by default now, not only when a
-// wizard supplies params. install-local is a CLI shortcut whose chown step
-// fails installs outright with the opaque "code 10237" on some builds
-// (conversun/fnos-apps#227, #228), while the daemon's install/task is the
-// native path fnOS's own App Center uses and does not hit it. Routing every
-// fresh install through it — with an empty param set when the app declares no
-// wizard — keeps the two mechanisms consistent. install-local survives only
-// as the fallback for a box whose daemon is unreachable, where it is safe
-// because a fresh install has no existing app/data to destroy.
-var installStep func() error
-switch chooseInstallRoute(opName, p.ac.UpgradeCapability().Allowed) {
-case routeDaemonUpgrade:
-    installStep = func() error { return p.upgradeFpk(ctx, fpkPath) }
-case routeDaemonInstall:
-    installStep = func() error { return p.installFpkWithWizard(ctx, fpkPath, volume, params) }
-default: // routeInstallLocal
-    installStep = func() error { return p.installFpk(fpkPath, volume) }
-}
+	// @appdata and can roll back. install-local is uninstall-then-reinstall and
+	// destroys the app when the reinstall fails — conversun/fnos-apps#189. A
+	// failure there must NEVER fall back to it.
+	//
+	// Fresh installs ALSO go through the daemon by default now, not only when a
+	// wizard supplies params. install-local is a CLI shortcut whose chown step
+	// fails installs outright with the opaque "code 10237" on some builds
+	// (conversun/fnos-apps#227, #228), while the daemon's install/task is the
+	// native path fnOS's own App Center uses and does not hit it. Routing every
+	// fresh install through it — with an empty param set when the app declares no
+	// wizard — keeps the two mechanisms consistent. install-local survives only
+	// as the fallback for a box whose daemon is unreachable, where it is safe
+	// because a fresh install has no existing app/data to destroy.
+	//
+	// The fallback is gated on the INSTALL probe, not the upgrade one: they are
+	// different routes, and letting the update probe decide this would reroute
+	// installs onto install-local because of a change that never touched installs.
+	var installStep func() error
+	switch chooseInstallRoute(opName, p.ac.DaemonInstallAvailable()) {
+	case routeDaemonUpgrade:
+		installStep = func() error { return p.upgradeFpk(ctx, fpkPath) }
+	case routeDaemonInstall:
+		installStep = func() error { return p.installFpkWithWizard(ctx, fpkPath, volume, params) }
+	default: // routeInstallLocal
+		installStep = func() error { return p.installFpk(fpkPath, volume) }
+	}
 
 	if err := runWithVirtualProgress(ctx, stream, "installing", "正在安装...", installStep); err != nil {
 		_ = stream.sendError(err.Error())
@@ -840,7 +845,7 @@ default: // routeInstallLocal
 		if !p.startAndConfirm(ctx, stream, app) {
 			return
 		}
-}
+	}
 
 	if p.cacheStore != nil && app.ReleaseTag != "" {
 		p.cacheStore.SetInstalledTag(app.AppName, app.ReleaseTag)
@@ -957,13 +962,27 @@ func (p *installPipeline) downloadFpkQuiet(ctx context.Context, app core.AppInfo
 // to the shared downloader for this one caller would risk serving a stale
 // package to every install path.
 //
-// The file is removed after reading so a wizard peek never leaves a package
-// behind for an install the user then cancels.
+// Both the store's local copy and the daemon's staged copy are removed after
+// reading, so a wizard peek the user then cancels leaves nothing behind.
 func (p *installPipeline) fetchWizard(ctx context.Context, app core.AppInfo) (*platform.AppWizard, error) {
 	fpkPath, err := p.downloadFpkQuiet(ctx, app)
 	if err != nil {
 		return nil, err
 	}
 	defer os.Remove(fpkPath)
-	return p.ac.FetchWizard(ctx, fpkPath)
+
+	// Staging drives the daemon exactly as an install does, so it takes the same
+	// lock. Without this a wizard preview can stage concurrently with a live
+	// install or upgrade, even though the rest of the pipeline is written on the
+	// assumption that daemon operations are serialized. The download above stays
+	// OUTSIDE the lock — it is slow, network-bound and touches no daemon state.
+	var wizard *platform.AppWizard
+	if err := p.queue.WithCLI(func() error {
+		var e error
+		wizard, e = p.ac.FetchWizard(ctx, fpkPath)
+		return e
+	}); err != nil {
+		return nil, err
+	}
+	return wizard, nil
 }

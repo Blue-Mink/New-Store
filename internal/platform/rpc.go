@@ -8,8 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
+	"net/http/httptrace"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -51,6 +55,11 @@ const (
 const (
 	daemonStatusRunning = 1
 	daemonStatusSuccess = 2
+	// daemonStatusUnknownTask is what /rpc/v1/common/status answers for a taskId
+	// the daemon does not know: code 0 (so not an error envelope) with status 5.
+	// Measured on 1.2.0505. A task the daemon has reaped and a task lost to a
+	// daemon restart are indistinguishable here, so this NEVER proves failure.
+	daemonStatusUnknownTask = 5
 )
 
 // rpcEnvelope is the daemon's uniform response shape.
@@ -90,9 +99,22 @@ func daemonCall(ctx context.Context, path string, body any, out any) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	var connected bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) { connected = true },
+	}))
+
 	resp, err := newDaemonClient(60 * time.Second).Do(req)
 	if err != nil {
-		return fmt.Errorf("app center daemon unreachable (%s): %w", path, err)
+		// Distinguish "provably never sent" from "may already have been acted
+		// on". Without a connection no byte reached the daemon, so a caller may
+		// safely fall back or retry. Once connected, a timeout or reset says
+		// nothing about whether the daemon received and executed the request —
+		// treating that as a plain failure is how a mutation gets run twice.
+		if !connected {
+			return fmt.Errorf("%w (%s): %v", ErrDaemonUnreachable, path, err)
+		}
+		return fmt.Errorf("%w (%s): %v", ErrDaemonAmbiguous, path, err)
 	}
 	defer resp.Body.Close()
 
@@ -110,6 +132,18 @@ func daemonCall(ctx context.Context, path string, body any, out any) error {
 	}
 	return nil
 }
+
+// ErrDaemonUnreachable marks a call that provably never reached the daemon:
+// the unix socket could not be dialed, so no byte was written and no state can
+// have changed. This is the ONLY transport failure after which a caller may
+// safely take a different mutating path.
+var ErrDaemonUnreachable = errors.New("app center daemon unreachable")
+
+// ErrDaemonAmbiguous marks a call that reached the daemon but whose outcome is
+// unknown — a timeout or reset after the connection was established. The
+// daemon may have received the request and acted on it, so a mutation MUST NOT
+// be retried or rerouted on this error.
+var ErrDaemonAmbiguous = errors.New("app center 请求结果未知")
 
 // DaemonError carries the daemon's own error code so callers can react to
 // known ones (e.g. 19000 = a required wizard field is missing).
@@ -312,7 +346,13 @@ func (a *LinuxAppCenter) UpgradeFpk(ctx context.Context, fpkPath string, params 
 	}, &task); err != nil {
 		return fmt.Errorf("升级失败: %w", err)
 	}
-	return a.waitTask(ctx, task.TaskID, "升级")
+	if err := a.waitTask(ctx, task.TaskID, "升级"); err != nil {
+		return err
+	}
+	// Reap the daemon's unpacked copy only once the task is DEFINITIVELY done.
+	// On a failed or unknown outcome the task may still be live and reading it.
+	removeStagedPackage(staged.Path)
+	return nil
 }
 
 // submitUninstall asks the daemon to uninstall an app and returns the task ID.
@@ -343,21 +383,80 @@ type taskStatus struct {
 	OutputText string  `json:"outputText"`
 }
 
+// ErrTaskOutcomeUnknown marks a daemon task whose result could not be
+// observed: the daemon no longer knows the task ID, polling was cut off, or no
+// terminal state was reached in time. The mutation may well have SUCCEEDED, so
+// this must never be reported as a plain failure and must never trigger an
+// automatic retry. Callers resolve it by checking on-disk postconditions.
+var ErrTaskOutcomeUnknown = errors.New("无法确认操作结果")
+
+// taskPollOutageBudget bounds how long waitTask tolerates being unable to
+// observe a task. Status polls are read-only, so retrying them is always safe;
+// the daemon emits transient failures (code 10050 / TRPC read timeout) under
+// load and is restarted outright by fnOS system updates. A consecutive-failure
+// count would be the wrong unit here — the poll interval, not the number of
+// failures, decides how much real downtime gets covered.
+const taskPollOutageBudget = 90 * time.Second
+
+// taskPollInterval paces both the happy path and the outage retry.
+const taskPollInterval = 2 * time.Second
+
+// sleepCtx waits for d unless ctx is done first.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
 // waitTask polls a daemon task to completion.
+//
+// It deliberately distinguishes three outcomes: success, definite failure, and
+// ErrTaskOutcomeUnknown. Losing sight of a task is NOT the same as the task
+// failing — the daemon keeps working after we stop watching — and conflating
+// them is what turns a completed upgrade into a user-visible error plus a
+// retry that mutates the same app a second time.
 func (a *LinuxAppCenter) waitTask(ctx context.Context, taskID, what string) error {
 	if taskID == "" {
 		return fmt.Errorf("%s失败: app center 未返回任务 ID", what)
 	}
 	deadline := time.Now().Add(15 * time.Minute)
+	var outageStart time.Time
 	for time.Now().Before(deadline) {
 		var st taskStatus
-		if err := daemonCall(ctx, routeCommonStatus, map[string]any{"taskId": taskID}, &st); err != nil {
-			return fmt.Errorf("查询%s状态失败: %w", what, err)
+		err := daemonCall(ctx, routeCommonStatus, map[string]any{"taskId": taskID}, &st)
+		if err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("%w: %s过程中断开了与 app center 的连接", ErrTaskOutcomeUnknown, what)
+			}
+			// Failing to READ the status says nothing about the task, so ride
+			// out a bounded outage rather than report a failure the daemon
+			// never had. StageFpk already does this for its own poll; the task
+			// poll covers far more time and needs it more.
+			if outageStart.IsZero() {
+				outageStart = time.Now()
+			}
+			if time.Since(outageStart) > taskPollOutageBudget {
+				return fmt.Errorf("%w: 已连续 %s 无法查询%s状态 (%v)", ErrTaskOutcomeUnknown, taskPollOutageBudget, what, err)
+			}
+			if sleepErr := sleepCtx(ctx, taskPollInterval); sleepErr != nil {
+				return fmt.Errorf("%w: %s过程中断开了与 app center 的连接", ErrTaskOutcomeUnknown, what)
+			}
+			continue
 		}
-		switch {
-		case st.Status == daemonStatusSuccess:
+		outageStart = time.Time{}
+
+		switch st.Status {
+		case daemonStatusSuccess:
 			return nil
-		case st.Status == daemonStatusRunning:
+		case daemonStatusRunning:
+		case daemonStatusUnknownTask:
+			// The daemon has no record of this task. Reaped after completing, or
+			// lost to a restart — indistinguishable from here, so neither may be
+			// assumed.
+			return fmt.Errorf("%w: app center 已不再持有该%s任务", ErrTaskOutcomeUnknown, what)
 		default:
 			detail := st.Message
 			if detail == "" {
@@ -365,14 +464,44 @@ func (a *LinuxAppCenter) waitTask(ctx context.Context, taskID, what string) erro
 			}
 			return fmt.Errorf("%s失败: 状态 %d %s", what, st.Status, detail)
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
+		if err := sleepCtx(ctx, taskPollInterval); err != nil {
+			return fmt.Errorf("%w: %s过程中断开了与 app center 的连接", ErrTaskOutcomeUnknown, what)
 		}
 	}
-	return fmt.Errorf("%s超时", what)
+	return fmt.Errorf("%w: %s超过 15 分钟仍未结束", ErrTaskOutcomeUnknown, what)
 }
+
+// removeStagedPackage deletes the daemon's unpacked copy of a package.
+//
+// The daemon never reaps these. A box with a handful of installs had
+// accumulated 165 MB of them, including two full copies belonging to an app
+// that had since been uninstalled — and because FetchWizard stages too, merely
+// PREVIEWING an install wizard and cancelling leaves one behind.
+//
+// This runs as root, so an unexpected path is left alone rather than removed:
+// only an absolute `.../appcenter-downloads/<something>-tpk` is touched.
+func removeStagedPackage(p string) {
+	if p == "" {
+		return
+	}
+	clean := filepath.Clean(p)
+	if !filepath.IsAbs(clean) ||
+		!strings.HasSuffix(clean, stagedDirSuffix) ||
+		filepath.Base(filepath.Dir(clean)) != stagedDirParent {
+		log.Printf("removeStagedPackage: refusing to remove unexpected path %q", p)
+		return
+	}
+	if err := os.RemoveAll(clean); err != nil {
+		log.Printf("removeStagedPackage: %s: %v", clean, err)
+	}
+}
+
+// Shape of the daemon's staging area, e.g.
+// /vol1/appcenter-downloads/openlist-4.2.5-tpk
+const (
+	stagedDirParent = "appcenter-downloads"
+	stagedDirSuffix = "-tpk"
+)
 
 // DaemonUpgradeAvailable reports whether the daemon's upgrade channel is
 // usable, so the store can prefer it and fall back to refusing rather than
@@ -393,6 +522,30 @@ func (a *LinuxAppCenter) DaemonUpgradeAvailable() bool {
 	return false
 }
 
+// DaemonInstallAvailable reports whether the daemon's INSTALL channel is
+// reachable.
+//
+// Deliberately separate from DaemonUpgradeAvailable: they probe different
+// routes, and conflating them means any change to the UPDATE probe silently
+// reroutes fresh installs onto install-local — the destructive path — without
+// anything about installs having actually broken.
+func (a *LinuxAppCenter) DaemonInstallAvailable() bool {
+	if _, err := net.DialTimeout("unix", daemonSocket, 2*time.Second); err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// Measured on 1.2.0505: an empty body yields 10030 on a route that exists,
+	// while a missing route answers a plain-text 404 that fails JSON decoding
+	// and therefore never produces a DaemonError.
+	err := daemonCall(ctx, routeInstallInfo, map[string]any{}, nil)
+	var de *DaemonError
+	if errors.As(err, &de) {
+		return de.Code == daemonCodeValidation
+	}
+	return false
+}
+
 // FetchWizard stages an fpk and returns its install-time form definition
 // WITHOUT installing anything.
 //
@@ -405,6 +558,9 @@ func (a *LinuxAppCenter) FetchWizard(ctx context.Context, fpkPath string) (*AppW
 	if err != nil {
 		return nil, err
 	}
+	// Nothing runs off this staging directory, so it can always be reaped — a
+	// wizard the user then cancels must not leave a full unpacked copy behind.
+	defer removeStagedPackage(staged.Path)
 
 	route := routeInstallInfo
 	body := map[string]any{
@@ -481,5 +637,9 @@ func (a *LinuxAppCenter) InstallFpkWithWizard(ctx context.Context, fpkPath strin
 	}, &task); err != nil {
 		return fmt.Errorf("安装失败: %w", err)
 	}
-	return a.waitTask(ctx, task.TaskID, "安装")
+	if err := a.waitTask(ctx, task.TaskID, "安装"); err != nil {
+		return err
+	}
+	removeStagedPackage(staged.Path)
+	return nil
 }
