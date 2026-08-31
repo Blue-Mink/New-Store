@@ -58,7 +58,7 @@ func (s *Server) RefreshRegistry(ctx context.Context) error {
 }
 
 func (s *Server) refreshRuntimeStatus() {
-	if s.ac == nil || s.queue == nil {
+	if s.ac == nil || s.queue == nil || s.registry == nil {
 		return
 	}
 
@@ -73,12 +73,18 @@ func (s *Server) refreshRuntimeStatus() {
 	}
 
 	status := make(map[string]string, len(apps))
+	versions := make(map[string]string, len(apps))
 	for _, app := range apps {
 		status[app.AppName] = app.Status
+		versions[app.AppName] = app.Version
 	}
 
 	s.mu.Lock()
 	s.statusByApp = status
+	// The daemon list is the authority on whether an app exists; fold it in
+	// so apps whose /var/apps manifest the scan missed still show as
+	// installed instead of dead-ending on install (#280/#281).
+	s.registry.ReconcileInstalled(versions)
 	s.mu.Unlock()
 }
 

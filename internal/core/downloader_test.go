@@ -1,7 +1,9 @@
 package core
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -11,9 +13,28 @@ import (
 	"time"
 )
 
-// fpkBody clears the downloader's minFpkSize (10 KiB) corruption check.
-func fpkBody() []byte {
-	return bytes.Repeat([]byte("fpk"), 4*1024) // 12 KiB
+// fpkBody builds a minimal VALID fpk: a gzip stream wrapping a tar whose
+// root carries a manifest entry. The downloader validates archive structure,
+// not size — docker-mode fpks legitimately ship under 10 KiB.
+func fpkBody(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	hdr := &tar.Header{Name: "manifest", Mode: 0o644, Size: int64(len("appname = demo\n"))}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("appname = demo\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 // serveBody starts a test server that answers every GET with body.
@@ -42,7 +63,7 @@ func tmpFilesIn(t *testing.T, dir string) []string {
 func TestDownloadUsesUniqueTempFile(t *testing.T) {
 	// Given a stale file squatting on the old deterministic temp path
 	dir := t.TempDir()
-	body := fpkBody()
+	body := fpkBody(t)
 	srv := serveBody(t, body)
 	d := NewDownloader(dir)
 	req := DownloadRequest{URLs: []string{srv.URL}, FileName: "x.fpk", AppName: "app"}
@@ -79,8 +100,8 @@ func TestDownloadUsesUniqueTempFile(t *testing.T) {
 func TestSequentialDownloadsDoNotCollide(t *testing.T) {
 	// Given two versions of the same fpk served back to back
 	dir := t.TempDir()
-	first := serveBody(t, fpkBody())
-	second := serveBody(t, append(fpkBody(), "v2"...))
+	first := serveBody(t, fpkBody(t))
+	second := serveBody(t, append(fpkBody(t), "v2"...))
 	d := NewDownloader(dir)
 
 	// When both are downloaded under the same final name
@@ -159,5 +180,67 @@ func TestCleanupStaleTmpFilesKeepsFreshFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Errorf("stale temp file survived cleanup")
+	}
+}
+
+// A mirror or portal can answer 200 with a full-size HTML error page. Size
+// alone must not pass as an fpk — the archive must actually be one
+// (conversun/fnos-apps#284 was the flip side: a valid 8483-byte docker fpk
+// rejected for being "too small").
+func TestDownloadRejectsErrorPageDespiteSize(t *testing.T) {
+	// Given an 11 KiB HTML body — comfortably past the old 10 KiB floor
+	dir := t.TempDir()
+	page := bytes.Repeat([]byte("<html><body>upstream rate limited, try later</body></html>\n"), 200)
+	if len(page) <= 10*1024 {
+		t.Fatalf("test body must exceed the old size floor, got %d", len(page))
+	}
+	srv := serveBody(t, page)
+	d := NewDownloader(dir)
+
+	// When it is downloaded
+	_, err := d.Download(context.Background(), DownloadRequest{
+		URLs: []string{srv.URL}, FileName: "x.fpk", AppName: "app",
+	}, nil)
+
+	// Then the non-archive body is rejected
+	if err == nil {
+		t.Fatal("Download accepted an HTML error page, want rejection")
+	}
+}
+
+// Docker-mode fpks carry no binaries and legitimately land under the old
+// 10 KiB floor; a structurally valid archive must be accepted.
+func TestDownloadAcceptsSmallValidFpk(t *testing.T) {
+	dir := t.TempDir()
+	srv := serveBody(t, fpkBody(t)) // ~200 bytes
+	d := NewDownloader(dir)
+
+	finalPath, err := d.Download(context.Background(), DownloadRequest{
+		URLs: []string{srv.URL}, FileName: "x.fpk", AppName: "app",
+	}, nil)
+	if err != nil {
+		t.Fatalf("Download rejected a valid small fpk: %v", err)
+	}
+	if _, err := os.Stat(finalPath); err != nil {
+		t.Errorf("final fpk missing: %v", err)
+	}
+}
+
+// A corrupt mirror first, GitHub direct second: the failure on URL #1 must
+// not stop the fallback from being tried and succeeding.
+func TestDownloadFallsBackAfterCorruptBody(t *testing.T) {
+	dir := t.TempDir()
+	corrupt := serveBody(t, bytes.Repeat([]byte("not gzip at all"), 1024))
+	good := serveBody(t, fpkBody(t))
+	d := NewDownloader(dir)
+
+	finalPath, err := d.Download(context.Background(), DownloadRequest{
+		URLs: []string{corrupt.URL, good.URL}, FileName: "x.fpk", AppName: "app",
+	}, nil)
+	if err != nil {
+		t.Fatalf("Download did not fall back to the good URL: %v", err)
+	}
+	if got, _ := os.ReadFile(finalPath); len(got) == 0 {
+		t.Error("final fpk is empty")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -113,7 +114,13 @@ func ScanInstalled(appsDir string) ([]Manifest, error) {
 			if errors.Is(parseErr, os.ErrNotExist) {
 				continue
 			}
-			return nil, parseErr
+			// One unparseable manifest (foreign app, bad service_port, oversized
+			// line) must not blind the store to every OTHER installed app: a
+			// scan-wide failure used to flip the whole catalog to not-installed,
+			// offering 安装 on apps the daemon had registered
+			// (conversun/fnos-apps#280 daidai-panel, #281 mihomo).
+			log.Printf("manifest: skipping %s: %v", manifestPath, parseErr)
+			continue
 		}
 
 		if m.Distributor != conversunDistributorTag {

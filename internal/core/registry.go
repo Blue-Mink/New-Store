@@ -169,3 +169,40 @@ func releaseTagPrefix(releaseTag string) (string, bool) {
 	}
 	return releaseTag[:idx], true
 }
+
+// ReconcileInstalled folds daemon-reported installed apps into the registry.
+//
+// The /var/apps manifest scan is the primary source of installed state, but
+// the app-center daemon is authoritative for WHETHER an app is installed.
+// When the daemon knows an app the scan missed, the store must not offer
+// 安装 on it — the daemon would reject the install with
+// "已安装，请使用更新功能" while the update tab shows nothing, dead-ending
+// the user (conversun/fnos-apps#280 daidai-panel, #281 mihomo).
+//
+// Daemon-discovered apps show the daemon's version string and are treated as
+// up to date: there is no local manifest to compare against, and a wrong
+// "update available" badge is worse than none. Callers must hold the same
+// lock they hold for Merge.
+func (r *Registry) ReconcileInstalled(daemon map[string]string) {
+	for i := range r.lastResult {
+		if r.lastResult[i].Installed {
+			continue
+		}
+		ver, known := daemon[r.lastResult[i].AppName]
+		if !known {
+			continue
+		}
+		r.lastResult[i].Installed = true
+		r.lastResult[i].InstalledVersion = ver
+		r.lastResult[i].Status = AppStatusInstalledUpToDate
+		r.lastResult[i].HasRevisionUpdate = false
+
+		if app, ok := r.apps[r.lastResult[i].AppName]; ok {
+			app.Installed = true
+			app.InstalledVersion = ver
+			app.Status = AppStatusInstalledUpToDate
+			app.HasRevisionUpdate = false
+			r.apps[r.lastResult[i].AppName] = app
+		}
+	}
+}

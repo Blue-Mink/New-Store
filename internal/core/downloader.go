@@ -1,6 +1,8 @@
 package core
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -184,11 +186,46 @@ func (d *Downloader) downloadFromURL(ctx context.Context, url, dstPath string, p
 		return err
 	}
 
-	const minFpkSize int64 = 10 * 1024
-	if downloaded < minFpkSize {
-		return fmt.Errorf("downloaded file too small (%d bytes) — likely corrupted", downloaded)
+	if err := validateFpk(dstPath); err != nil {
+		return err
 	}
 	return nil
+}
+
+// validateFpk proves the downloaded bytes are an fpk: a gzip stream wrapping
+// a tar whose root carries a manifest entry.
+//
+// Size alone cannot be the gate in either direction. Docker-mode fpks ship
+// no binaries and legitimately land under 10 KiB (astrbot 4.27.4 is 8483
+// bytes, conversun/fnos-apps#284), while a mirror answering 200 with a
+// full-size HTML error page defeats any size floor. Archive structure is
+// the actual contract the installer relies on.
+func validateFpk(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("downloaded file is not a valid fpk archive: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return errors.New("downloaded fpk has no manifest entry — likely corrupted or an error page")
+		}
+		if err != nil {
+			return fmt.Errorf("downloaded fpk is truncated: %w", err)
+		}
+		if filepath.Base(hdr.Name) == "manifest" {
+			return nil
+		}
+	}
 }
 
 func checkTmpSpace(tmpDir string) error {

@@ -157,3 +157,47 @@ func TestMergeOnlyReturnsCatalogApps(t *testing.T) {
 		t.Errorf("never-installed InstalledVersion = %q, want empty", byName["never-installed"].InstalledVersion)
 	}
 }
+
+// ReconcileInstalled is the daemon-truth backstop: fnOS can register an app
+// whose /var/apps manifest the scan misses, which used to leave the store
+// offering 安装 on an installed app — the daemon then rejected it with
+// "已安装，请使用更新功能" while the update tab showed nothing, dead-ending
+// the user (conversun/fnos-apps#280 daidai-panel, #281 mihomo).
+func TestReconcileInstalledFromDaemon(t *testing.T) {
+	r := NewRegistry()
+	r.Merge([]Manifest{
+		{AppName: "scanned-app", Version: "1.0.0", FpkVersion: "1.0.0", Distributor: conversunDistributorTag},
+	}, []source.RemoteApp{
+		{AppName: "daidai-panel", Version: "3.0.10", FpkVersion: "3.0.10"},
+		{AppName: "scanned-app", Version: "1.0.0", FpkVersion: "1.0.0"},
+		{AppName: "fresh-app", Version: "2.0.0", FpkVersion: "2.0.0"},
+	}, nil)
+
+	// Daemon knows daidai-panel (scan missed it) and scanned-app (agrees).
+	r.ReconcileInstalled(map[string]string{
+		"daidai-panel": "3.0.10",
+		"scanned-app":  "1.0.0",
+		"system-app":   "9.9.9", // not in catalog — ignored
+	})
+
+	byName := make(map[string]AppInfo)
+	for _, a := range r.List() {
+		byName[a.AppName] = a
+	}
+
+	if !byName["daidai-panel"].Installed {
+		t.Error("daemon-installed daidai-panel must be marked installed")
+	}
+	if byName["daidai-panel"].Status != AppStatusInstalledUpToDate {
+		t.Errorf("daidai-panel status = %q, want installed_up_to_date (no local version to compare)", byName["daidai-panel"].Status)
+	}
+	if byName["daidai-panel"].InstalledVersion != "3.0.10" {
+		t.Errorf("daidai-panel InstalledVersion = %q, want the daemon-reported 3.0.10", byName["daidai-panel"].InstalledVersion)
+	}
+	if !byName["scanned-app"].Installed || byName["scanned-app"].InstalledFpkVersion != "1.0.0" {
+		t.Error("already-scanned app must keep its manifest-derived state")
+	}
+	if byName["fresh-app"].Installed {
+		t.Error("app unknown to the daemon must stay not-installed")
+	}
+}
