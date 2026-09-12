@@ -480,6 +480,72 @@ func TestPreflightInstall(t *testing.T) {
 	})
 }
 
+// TestPrecheckServicePort locks the install-time port probe behind
+// conversun/fnos-apps#295: an install whose published port is taken must fail
+// BEFORE any download, naming the port, with the wizard's answer outranking
+// the catalog default.
+func TestPrecheckServicePort(t *testing.T) {
+	p := &installPipeline{queue: NewOperationQueue(), ac: &stubAppCenter{}}
+
+	t.Run("passes when the catalog port is free", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("reserve port: %v", err)
+		}
+		freePort := ln.Addr().(*net.TCPAddr).Port
+		ln.Close()
+		app := core.AppInfo{AppName: "paperless-ngx", ServicePort: freePort}
+		if err := p.precheckServicePort(app, nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("fails naming the port when the catalog port is taken", func(t *testing.T) {
+		ln, err := net.Listen("tcp", ":0")
+		if err != nil {
+			t.Fatalf("bind: %v", err)
+		}
+		defer ln.Close()
+		busy := ln.Addr().(*net.TCPAddr).Port
+		app := core.AppInfo{AppName: "paperless-ngx", ServicePort: busy}
+		err = p.precheckServicePort(app, nil)
+		if err == nil {
+			t.Fatalf("expected error for busy port %d, got nil", busy)
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf("%d", busy)) {
+			t.Errorf("error %q does not name the busy port", err.Error())
+		}
+	})
+
+	t.Run("wizard answer outranks the catalog default", func(t *testing.T) {
+		ln, err := net.Listen("tcp", ":0")
+		if err != nil {
+			t.Fatalf("bind: %v", err)
+		}
+		defer ln.Close()
+		busy := ln.Addr().(*net.TCPAddr).Port
+
+		ln2, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("reserve: %v", err)
+		}
+		freePort := ln2.Addr().(*net.TCPAddr).Port
+		ln2.Close()
+
+		app := core.AppInfo{AppName: "paperless-ngx", ServicePort: freePort}
+		params := []platform.WizardParam{{Key: "wizard_port", Value: fmt.Sprintf("%d", busy)}}
+		if err := p.precheckServicePort(app, params); err == nil {
+			t.Fatalf("expected error for busy wizard port %d, got nil", busy)
+		}
+	})
+
+	t.Run("skips the probe when no port is known", func(t *testing.T) {
+		if err := p.precheckServicePort(core.AppInfo{AppName: "x"}, nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
 // TestSetDefaultVolume locks that the update volume pin drives the documented
 // default-volume lever and surfaces CLI failures so the caller can fail closed
 // before the destructive install-local (conversun/fnos-apps#189).
@@ -972,6 +1038,42 @@ func TestDockerPullCandidates(t *testing.T) {
 				t.Errorf("duplicate candidate %q in %v", c, got)
 			}
 			seen[c] = true
+		}
+	})
+
+	t.Run("ghcr ref reaches the NJU rewrite mirror before direct", func(t *testing.T) {
+		cfg := config.Config{DockerMirror: "daocloud"}
+		got := dockerPullCandidates("m.daocloud.io/ghcr.io/paperless-ngx/paperless-ngx:3.1.1", cfg)
+		if len(got) < 3 {
+			t.Fatalf("len = %d, want at least 3: %v", len(got), got)
+		}
+		if got[0] != "m.daocloud.io/ghcr.io/paperless-ngx/paperless-ngx:3.1.1" {
+			t.Errorf("first candidate = %q, want the selected mirror's shape", got[0])
+		}
+		// Single-registry mirrors cannot proxy ghcr and collapse onto the
+		// direct ref, so NJU's rewrite is the only real second source.
+		if got[1] != "ghcr.nju.edu.cn/paperless-ngx/paperless-ngx:3.1.1" {
+			t.Errorf("second candidate = %q, want the NJU rewrite shape", got[1])
+		}
+		if got[len(got)-1] != "ghcr.io/paperless-ngx/paperless-ngx:3.1.1" {
+			t.Errorf("last candidate = %q, want the direct ghcr ref", got[len(got)-1])
+		}
+	})
+
+	t.Run("NJU selection leads ghcr with its rewrite and docker.io with direct", func(t *testing.T) {
+		cfg := config.Config{DockerMirror: "nju-ghcr"}
+		ghcr := dockerPullCandidates("ghcr.io/paperless-ngx/paperless-ngx:3.1.1", cfg)
+		if len(ghcr) == 0 || ghcr[0] != "ghcr.nju.edu.cn/paperless-ngx/paperless-ngx:3.1.1" {
+			t.Errorf("ghcr first candidate = %v, want the NJU rewrite shape", ghcr)
+		}
+		dockerio := dockerPullCandidates("docker.io/xream/sub-store:2.36.35", cfg)
+		if len(dockerio) == 0 || dockerio[0] != "docker.io/xream/sub-store:2.36.35" {
+			t.Errorf("docker.io first candidate = %v, want the direct ref (NJU serves no docker.io)", dockerio)
+		}
+		for _, c := range dockerio {
+			if c == "ghcr.nju.edu.cn/docker.io/xream/sub-store:2.36.35" {
+				t.Errorf("candidate %q misapplies the ghcr rewrite to a docker.io ref", c)
+			}
 		}
 	})
 }

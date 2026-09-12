@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -269,6 +271,45 @@ func (p *installPipeline) preflightInstall(volume int, fpkPath string) error {
 // effect by reading the value back inside the same CLI critical section.
 //
 // The read-back is the whole point. `appcenter-cli default-volume <n>` exits 0
+// wizardHostPort scans install-wizard answers for a host-port field. fnOS
+// apps name it wizard_port / wizard_web_port etc. and the value is the HOST
+// port the app publishes (paperless-ngx and transmission both work this way).
+func wizardHostPort(params []platform.WizardParam) int {
+	for _, prm := range params {
+		if !strings.Contains(strings.ToLower(prm.Key), "port") {
+			continue
+		}
+		if v, err := strconv.Atoi(strings.TrimSpace(prm.Value)); err == nil && v > 0 && v < 65536 {
+			return v
+		}
+	}
+	return 0
+}
+
+// precheckServicePort fails a fresh install BEFORE any download when the
+// port the app will publish is already taken on this box. The wizard's
+// port wins over the catalog default; both are host ports in every app
+// that exposes one. The listen probe sees sockets held by docker-proxy
+// the store itself, and any native service — exactly the holders that make
+// Docker's "port is already allocated" abort an appcenter install task
+// halfway, leaving the half-registered app that neither stop, uninstall nor
+// reinstall can clear (conversun/fnos-apps#295). NAT-only published ports
+// hold no socket and pass the probe — best effort, not a guarantee.
+func (p *installPipeline) precheckServicePort(app core.AppInfo, params []platform.WizardParam) error {
+	port := wizardHostPort(params)
+	if port == 0 {
+		port = app.ServicePort
+	}
+	if port <= 0 || port >= 65536 {
+		return nil
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return fmt.Errorf("端口 %d 已被占用，已中止安装以免系统残留半安装状态。请先释放该端口，或在安装向导中改用其他端口后重试", port)
+	}
+	return ln.Close()
+}
+
 // and prints the unchanged value when the daemon declines the change, so a nil
 // error from the setter is NOT evidence the volume was pinned. Worse, the CLI's
 // own help documents -v/--volume as "(ignored during upgrades)", which means
@@ -751,6 +792,18 @@ func (p *installPipeline) runStandard(ctx context.Context, stream *sseStream, op
 	// reaches the uninstall-then-failed-reinstall path.
 	if opName == "update" {
 		if err := p.requireSafeUpgrade(); err != nil {
+			_ = stream.sendError(err.Error())
+			return
+		}
+	}
+
+	// A fresh install whose published port is already taken dies at Docker's
+	// container-create step, halfway through appcenter's install task, and
+	// leaves the app half-registered — the zombie state where neither stop
+	// nor uninstall nor reinstall works (conversun/fnos-apps#295). Probe the
+	// port before downloading anything so the failure is a clean no-op.
+	if opName != "update" {
+		if err := p.precheckServicePort(app, params); err != nil {
 			_ = stream.sendError(err.Error())
 			return
 		}
