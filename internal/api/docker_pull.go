@@ -40,23 +40,63 @@ func isPullAbortError(output string, err error) bool {
 }
 
 // dockerPullCandidates builds the ordered refs to try for one compose image:
-// the selected mirror's shape first, every other real mirror re-prefixed by
-// ITS OWN multi-registry capability, then the bare direct ref last
-// (conversun/fnos-apps#267, #266, #257, #248). Duplicates collapse — e.g. a
-// single-registry mirror cannot proxy a non-docker.io registry and yields
-// the direct ref, which the chain already carries.
+// the selected mirror's shape first (including its registry-rewrite refs),
+// every other real mirror re-prefixed by ITS OWN multi-registry capability,
+// other mirrors' registry-rewrite refs, then the bare direct ref last
+// (conversun/fnos-apps#267, #266, #257, #248; ghcr rewrite: #286).
+// Duplicates collapse — e.g. a single-registry mirror cannot proxy a
+// non-docker.io registry and yields the direct ref, which the chain already
+// carries.
 func dockerPullCandidates(composeRef string, cfg config.Config) []string {
 	canonical := stripDockerMirrorPrefix(composeRef, cfg)
-	prefixes := config.DockerFallbackPrefixes(cfg.DockerMirror, cfg)
-	candidates := make([]string, 0, len(prefixes))
-	seen := make(map[string]struct{}, len(prefixes))
-	for _, prefix := range prefixes {
-		ref := applyDockerMirrorPrefix(canonical, prefix)
+	candidates := make([]string, 0, 8)
+	seen := make(map[string]struct{}, 8)
+	add := func(ref string) {
 		if _, dup := seen[ref]; dup {
-			continue
+			return
 		}
 		seen[ref] = struct{}{}
 		candidates = append(candidates, ref)
+	}
+
+	// Rewrite mirrors for the SELECTED mirror lead the chain...
+	for _, m := range config.DockerMirrorOptions() {
+		if m.Key != cfg.DockerMirror {
+			continue
+		}
+		for _, ref := range config.RewriteRefsForMirror(m, canonical) {
+			add(ref)
+		}
+	}
+
+	prefixes := config.DockerFallbackPrefixes(cfg.DockerMirror, cfg)
+	// ...other mirrors' rewrites slot in before the trailing direct ref, so a
+	// ghcr-capable mirror outranks a hopeless direct ghcr.io pull.
+	trailingDirect := len(prefixes) > 0 && prefixes[len(prefixes)-1] == ""
+	body := prefixes
+	if trailingDirect {
+		body = prefixes[:len(prefixes)-1]
+	}
+	for _, prefix := range body {
+		ref := applyDockerMirrorPrefix(canonical, prefix)
+		// A single-registry mirror cannot proxy a non-docker.io registry and
+		// collapses onto the bare canonical ref. Skip that placeholder here so
+		// the rewrite mirrors below outrank the direct pull, which closes the
+		// chain where it belongs.
+		if ref != canonical || !trailingDirect {
+			add(ref)
+		}
+	}
+	for _, m := range config.DockerMirrorOptions() {
+		if m.Key == cfg.DockerMirror {
+			continue
+		}
+		for _, ref := range config.RewriteRefsForMirror(m, canonical) {
+			add(ref)
+		}
+	}
+	if trailingDirect {
+		add(canonical)
 	}
 	return candidates
 }

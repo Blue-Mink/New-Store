@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 )
 
@@ -26,7 +28,12 @@ type DockerMirror struct {
 	Label         string
 	URL           string
 	Description   string
-	MultiRegistry bool // supports proxying multiple registries (docker.io, ghcr.io, lscr.io, etc.)
+	MultiRegistry bool // supports proxying multiple registries via path prefix (docker.io, ghcr.io, ...)
+	// RegistryRewrites maps an upstream registry host to this mirror's
+	// replacement base for that registry (e.g. "ghcr.io" -> "ghcr.nju.edu.cn/").
+	// Unlike URL prefixing the registry host is REPLACED, not carried in the
+	// path — the shape ghcr-only mirrors use. Empty for prefix-style mirrors.
+	RegistryRewrites map[string]string
 }
 
 var gitHubMirrors = []GitHubMirror{
@@ -43,6 +50,14 @@ var gitHubMirrors = []GitHubMirror{
 
 var dockerMirrors = []DockerMirror{
 	{Key: "daocloud", Label: "DaoCloud", URL: "m.daocloud.io/", Description: "DaoCloud 公共 Docker 镜像加速", MultiRegistry: true},
+	// ghcr.io has effectively NO public path-prefix proxy: every prefix-style
+	// mirror below denies ghcr refs (measured on a live fnOS box — allowlist or
+	// manifest failures across 1ms/rat.dev/1panel/dockerproxy/registry.cyou),
+	// so ghcr-sourced apps (paperless-ngx #286 and friends) fell through to a
+	// direct ghcr.io pull that EOFs behind the GFW. NJU mirrors ghcr by host
+	// rewrite (ghcr.io/owner/img -> ghcr.nju.edu.cn/owner/img), verified by a
+	// full layer pull on fnOS 1.2.0203. It serves ONLY ghcr.io.
+	{Key: "nju-ghcr", Label: "NJU ghcr", Description: "南京大学 ghcr.io 专用镜像（ghcr 应用推荐）", RegistryRewrites: map[string]string{"ghcr.io": "ghcr.nju.edu.cn/"}},
 	{Key: "docker-1ms", Label: "1ms.run", URL: "docker.1ms.run/", Description: "社区 Docker 镜像加速"},
 	{Key: "daocloud-docker", Label: "DaoCloud Docker", URL: "docker.m.daocloud.io/", Description: "DaoCloud Docker 镜像加速（全球可用）"},
 	{Key: "ratdev", Label: "Rat.Dev", URL: "hub.rat.dev/", Description: "Rat 社区 Docker 镜像加速"},
@@ -92,6 +107,23 @@ func IsDockerMirrorMultiRegistry(key string) bool {
 	return false
 }
 
+// RewriteRefsForMirror returns the refs mirror m serves for canonical by
+// rewriting the upstream registry host (ghcr.io/x/y -> ghcr.nju.edu.cn/x/y).
+// Empty when m has no rewrite covering the ref's registry.
+func RewriteRefsForMirror(m DockerMirror, canonical string) []string {
+	var refs []string
+	registries := make([]string, 0, len(m.RegistryRewrites))
+	for registry := range m.RegistryRewrites {
+		registries = append(registries, registry)
+	}
+	sort.Strings(registries) // deterministic candidate order
+	for _, registry := range registries {
+		if strings.HasPrefix(canonical, registry+"/") {
+			refs = append(refs, m.RegistryRewrites[registry]+canonical[len(registry)+1:])
+		}
+	}
+	return refs
+}
 func GitHubFallbackPrefixes(selectedKey string, cfg Config) []string {
 	prefixes := make([]string, 0, len(gitHubMirrors))
 	selected := GitHubMirrorPrefix(selectedKey, cfg)
