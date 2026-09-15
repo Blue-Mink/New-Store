@@ -14,6 +14,9 @@ const (
 	DefaultDataDir            = "/var/apps/fnos-apps-store/var"
 	DefaultMirror             = "gh-proxy"
 	DefaultDockerMirror       = "daocloud"
+	// DefaultSourceListURL 内置的社区 FnDepot 应用源列表（每行一个 GitHub 仓库地址）。
+	// 同步时列表中未添加过的源会自动加入应用源。
+	DefaultSourceListURL = "https://raw.githubusercontent.com/710850609/FnDepot/main/repo_list.txt"
 )
 
 type GitHubMirror struct {
@@ -171,6 +174,10 @@ type Config struct {
 	IgnoredApps        []string `json:"ignored_apps,omitempty"`
 	// Sources 是用户添加的 FnDepot 外部应用源（V1/V2 协议）。
 	Sources []CustomSource `json:"sources,omitempty"`
+	// SourceListURL 自定义源列表地址（空 = 内置 DefaultSourceListURL）。
+	SourceListURL string `json:"source_list_url,omitempty"`
+	// SourceListDisabled 关闭「自动同步源列表」（旧配置无此字段 = 未关闭 = 自动同步开启）。
+	SourceListDisabled bool `json:"source_list_disabled,omitempty"`
 }
 
 // CustomSource 描述一个用户添加的外部应用源。

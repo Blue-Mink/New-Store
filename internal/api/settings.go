@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"fnos-store/internal/config"
@@ -31,6 +32,9 @@ type settingsResponse struct {
 	CustomDockerMirror  string                 `json:"custom_docker_mirror,omitempty"`
 	InstallVolume       int                    `json:"install_volume"`
 	VolumeOptions       []volumeOptionResponse `json:"volume_options"`
+	// 内置源列表自动同步
+	SourceListURL      string `json:"source_list_url,omitempty"`
+	SourceListDisabled bool   `json:"source_list_disabled"`
 }
 
 type settingsRequest struct {
@@ -40,6 +44,9 @@ type settingsRequest struct {
 	CustomGitHubMirror string `json:"custom_github_mirror"`
 	CustomDockerMirror string `json:"custom_docker_mirror"`
 	InstallVolume      int    `json:"install_volume"`
+	// 内置源列表自动同步（空 URL = 用内置默认列表）
+	SourceListURL      string `json:"source_list_url"`
+	SourceListDisabled bool   `json:"source_list_disabled"`
 }
 
 func githubMirrorOptionsResponse() []mirrorOptionResponse {
@@ -86,6 +93,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		CustomDockerMirror:  cfg.CustomDockerMirror,
 		InstallVolume:       cfg.InstallVolume,
 		VolumeOptions:       volOpts,
+		SourceListURL:       cfg.SourceListURL,
+		SourceListDisabled:  cfg.SourceListDisabled,
 	})
 }
 
@@ -122,6 +131,8 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		InstallVolume:      req.InstallVolume,
 		IgnoredApps:        existing.IgnoredApps,
 		Sources:            existing.Sources, // 外部应用源由 /api/sources 管理，这里保持不动
+		SourceListURL:      strings.TrimSpace(req.SourceListURL),
+		SourceListDisabled: req.SourceListDisabled,
 	}
 
 	if err := s.configMgr.SaveConfig(cfg); err != nil {
@@ -151,5 +162,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		CustomDockerMirror:  req.CustomDockerMirror,
 		InstallVolume:       req.InstallVolume,
 		VolumeOptions:       volOpts,
+		SourceListURL:       cfg.SourceListURL,
+		SourceListDisabled:  cfg.SourceListDisabled,
 	})
 }

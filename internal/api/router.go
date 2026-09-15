@@ -95,8 +95,11 @@ func NewServer(cfg Config) *Server {
 	}
 	s.routes()
 	s.rebuildCustomSources()
-	_ = s.refreshRecommended(context.Background())
-	_ = s.refreshRegistry(context.Background())
+	// 首次刷新放后台：源列表自动同步（首跑要验证几十个仓库）+ 目录抓取
+	// 可能耗时数分钟，不能阻塞 HTTP 监听。UI 先出骨架/「检查中」，数据就绪后
+	// SSE/轮询自然补齐。scheduler 的即时首查由 lastCheck 防重。
+	go s.refreshRecommended(context.Background())
+	go s.refreshRegistry(context.Background())
 	return s
 }
 
@@ -123,6 +126,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/sources/batch", s.handleBatchAddSources)
 	s.Mux.HandleFunc("DELETE /api/sources/{id}", s.handleRemoveSource)
 	s.Mux.HandleFunc("POST /api/sources/{id}/sync", s.handleSyncSource)
+	s.Mux.HandleFunc("POST /api/sources/sync-list", s.handleSyncSourceList)
 	s.Mux.HandleFunc("GET /api/store-update", s.handleGetStoreUpdate)
 	s.Mux.HandleFunc("POST /api/store-update", s.handlePostStoreUpdate)
 	s.Mux.HandleFunc("POST /api/mirrors/check", s.handleCheckMirrors)

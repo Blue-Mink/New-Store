@@ -191,6 +191,13 @@ func fndepotPlatformOK(declared json.RawMessage, current string) bool {
 
 // NewFNDepotSource 解析并验证用户填写的源地址（立即 fetch+parse）。
 func NewFNDepotSource(rawURL string, configMgr *config.Manager) (*FNDepotSource, error) {
+	return NewFNDepotSourceCtx(context.Background(), rawURL, configMgr)
+}
+
+// NewFNDepotSourceCtx 同 NewFNDepotSource，但受 ctx 约束：ctx 到期立即中止
+// 正在进行的抓取（批量同步源列表场景用，避免死链仓库把整个批次拖死）。
+// 每个抓取候选各自最多 fndepotFetchTimeout，且不超过 ctx 剩余时间。
+func NewFNDepotSourceCtx(ctx context.Context, rawURL string, configMgr *config.Manager) (*FNDepotSource, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		return nil, fmt.Errorf("源地址为空")
@@ -203,9 +210,8 @@ func NewFNDepotSource(rawURL string, configMgr *config.Manager) (*FNDepotSource,
 		return nil, fmt.Errorf("无效的源地址: %s", rawURL)
 	}
 
-	client := &http.Client{Timeout: fndepotFetchTimeout}
 	s := &FNDepotSource{
-		httpClient: client,
+		httpClient: &http.Client{Timeout: fndepotFetchTimeout},
 		configMgr:  configMgr,
 		sourceURL:  rawURL,
 		id:         fndepotSourceID(rawURL),
@@ -215,8 +221,13 @@ func NewFNDepotSource(rawURL string, configMgr *config.Manager) (*FNDepotSource,
 	jsonURL, fallbacks := resolveJSONURL(u)
 	var lastErr error
 	for _, candidate := range s.fetchCandidates(jsonURL, fallbacks) {
-		body, fetchErr := httpGetJSON(candidate, client)
+		cctx, cancel := context.WithTimeout(ctx, fndepotFetchTimeout)
+		body, fetchErr := httpGetJSONCtx(cctx, candidate)
+		cancel()
 		if fetchErr != nil {
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("源验证超时: %w", ctx.Err())
+			}
 			lastErr = fetchErr
 			continue
 		}
@@ -318,6 +329,25 @@ func httpGetJSON(rawURL string, client *http.Client) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "fnos-store/1.x")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %s", resp.Status)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+}
+
+// httpGetJSONCtx 是 httpGetJSON 的 ctx 版本（超时完全由 ctx 控制）。
+func httpGetJSONCtx(ctx context.Context, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "fnos-store/1.x")
+	client := &http.Client{} // 超时由 ctx 控制
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

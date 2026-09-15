@@ -301,6 +301,18 @@ export interface Settings {
   custom_docker_mirror?: string;
   install_volume: number;
   volume_options?: VolumeOption[];
+  // 内置源列表自动同步（空/缺省 = 内置默认列表地址）
+  source_list_url?: string;
+  source_list_disabled?: boolean;
+}
+
+export interface SourceListSyncResult {
+  fetched: number;
+  already: number;
+  added: number;
+  failed: number;
+  added_names?: string[];
+  errors?: string[];
 }
 
 export interface MirrorCheckResult {
@@ -408,6 +420,15 @@ export const syncSource = async (id: string): Promise<SourceEntry> => {
   return body.source as SourceEntry;
 };
 
+/** 同步内置源列表：自动发现并添加列表中未添加过的 FnDepot 应用源。 */
+export const syncSourceList = async (): Promise<SourceListSyncResult> => {
+  const response = await fetch(apiUrl('/api/sources/sync-list'), { method: 'POST' });
+  if (!response.ok) {
+    throw new Error(await extractError(response, `同步源列表失败: ${response.statusText}`));
+  }
+  return response.json();
+};
+
 export const removeSource = async (id: string): Promise<void> => {
   const response = await fetch(apiUrl(`/api/sources/${encodeURIComponent(id)}`), {
     method: 'DELETE',
@@ -440,7 +461,7 @@ export const fetchSettings = async (): Promise<Settings> => {
   return response.json();
 };
 
-export const updateSettings = async (settings: { check_interval_hours: number; mirror: string; docker_mirror: string; custom_github_mirror?: string; custom_docker_mirror?: string; install_volume: number }): Promise<void> => {
+export const updateSettings = async (settings: { check_interval_hours: number; mirror: string; docker_mirror: string; custom_github_mirror?: string; custom_docker_mirror?: string; install_volume: number; source_list_url?: string; source_list_disabled?: boolean }): Promise<void> => {
   const response = await fetch(apiUrl('/api/settings'), {
     method: 'PUT',
     headers: {

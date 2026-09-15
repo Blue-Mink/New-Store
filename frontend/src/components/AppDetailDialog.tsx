@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { AppInfo, AppOperation } from '../api/client';
 import { availableVersionLabel, installedVersionLabel, assetUrl } from '../api/client';
 import { apiUrl } from '../api/base';
@@ -76,6 +77,22 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
   const [readme, setReadme] = useState<string | null>(null);
   const [readmeError, setReadmeError] = useState(false);
   const [lightbox, setLightbox] = useState<number | null>(null);
+  const [lightboxLoading, setLightboxLoading] = useState(false);
+  const [lightboxError, setLightboxError] = useState(false);
+  const [lightboxRetry, setLightboxRetry] = useState(0);
+
+  // 灯箱切换图片：重置加载/错误态 + 预加载下一张（弱网下少一次白等）
+  useEffect(() => {
+    if (lightbox == null || !app) return;
+    setLightboxLoading(true);
+    setLightboxError(false);
+    const pc = app.preview_count || 0;
+    if (pc > 1) {
+      const next = new Image();
+      next.src = assetUrl(app.key || app.appname, 'preview', (lightbox + 1) % pc);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lightbox, app?.key, open]);
 
   // 切换应用时重新拉 README
   useEffect(() => {
@@ -444,38 +461,64 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
         </div>
       </DialogContent>
 
-      {/* 预览图灯箱 */}
-      {lightbox != null && (
+      {/* 预览图灯箱：createPortal 挂到 document.body + z-[100]，
+          确保压在 Radix DialogOverlay(z-50) 之上（修复点击被 overlay 拦截的问题） */}
+      {lightbox != null && createPortal(
         <div
-          className="fixed inset-0 z-[60] bg-black/90 flex items-center justify-center p-6"
+          className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4 select-none"
+          style={{ zIndex: 100, pointerEvents: 'auto' }}
+          // 灯箱 portal 在 Radix Dialog 的 DOM 之外：必须在这里拦掉 pointerdown，
+          // 否则灯箱内任何点击都会触发 Radix 的「外部点击关闭对话框」。
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={() => setLightbox(null)}
         >
-          <button className="absolute top-4 right-4 text-white/80 hover:text-white" onClick={() => setLightbox(null)} aria-label="关闭">
+          <button className="absolute top-4 right-4 z-10 p-2 text-white/80 hover:text-white pointer-events-auto" onClick={() => setLightbox(null)} aria-label="关闭">
             <X className="h-6 w-6" />
           </button>
           <button
-            className="absolute left-4 top-1/2 -translate-y-1/2 text-white/60 hover:text-white disabled:opacity-0"
+            className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-10 p-2 text-white/60 hover:text-white disabled:opacity-0 pointer-events-auto"
             disabled={lightbox === 0}
             onClick={(e) => { e.stopPropagation(); setLightbox((lightbox - 1 + previewCount) % previewCount); }}
             aria-label="上一张"
           >
             <ChevronLeft className="h-8 w-8" />
           </button>
-          <img
-            src={assetUrl(app.key || app.appname, 'preview', lightbox)}
-            alt={`${app.display_name} 预览 ${lightbox + 1}`}
-            className="max-w-full max-h-full object-contain rounded-lg"
-            onClick={(e) => e.stopPropagation()}
-          />
+          <div className="relative flex items-center justify-center w-full h-full" style={{ pointerEvents: 'auto' }} onClick={(e) => e.stopPropagation()}>
+            {lightboxLoading && !lightboxError && (
+              <div className="absolute flex flex-col items-center gap-2 text-white/70">
+                <Loader2 className="h-8 w-8 animate-spin" />
+                <span className="text-xs">预览图加载中…</span>
+              </div>
+            )}
+            {lightboxError ? (
+              <div className="flex flex-col items-center gap-3 text-white/80">
+                <p className="text-sm">预览图加载失败</p>
+                <Button variant="outline" size="sm" className="border-white/40 text-white hover:bg-white/10 hover:text-white"
+                  onClick={() => { setLightboxError(false); setLightboxLoading(true); setLightboxRetry((n) => n + 1); }}>
+                  重试
+                </Button>
+              </div>
+            ) : (
+              <img
+                src={assetUrl(app.key || app.appname, 'preview', lightbox) + (lightboxRetry ? `&r=${lightboxRetry}` : '')}
+                alt={`${app.display_name} 预览 ${lightbox + 1}`}
+                className={`max-w-full max-h-full object-contain rounded-lg transition-opacity duration-200 pointer-events-auto ${lightboxLoading ? 'opacity-0' : 'opacity-100'}`}
+                onLoad={() => setLightboxLoading(false)}
+                onError={() => { setLightboxLoading(false); setLightboxError(true); }}
+                draggable={false}
+              />
+            )}
+          </div>
           <button
-            className="absolute right-4 top-1/2 -translate-y-1/2 text-white/60 hover:text-white disabled:opacity-0"
+            className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-10 p-2 text-white/60 hover:text-white disabled:opacity-0 pointer-events-auto"
             disabled={lightbox === previewCount - 1}
             onClick={(e) => { e.stopPropagation(); setLightbox((lightbox + 1) % previewCount); }}
             aria-label="下一张"
           >
             <ChevronRight className="h-8 w-8" />
           </button>
-        </div>
+        </div>,
+        document.body
       )}
     </Dialog>
   );

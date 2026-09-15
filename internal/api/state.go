@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log"
 	"sync"
 	"time"
 
@@ -25,6 +26,19 @@ func (s *Server) refreshRegistry(ctx context.Context) error {
 	localApps, err := core.ScanInstalled(s.appsDir)
 	if err != nil {
 		return err
+	}
+
+	// 内置源列表自动同步：每次目录检查时，把源列表里未添加过的 FnDepot 源
+	// 自动加入（设置 source_list_disabled 可整体关闭）。失败只记日志，
+	// 不阻断本次目录刷新。refreshOnAdd=false —— 外层紧接着抓取全部源。
+	if s.configMgr != nil {
+		if cfg := s.configMgr.Get(); !cfg.SourceListDisabled {
+			if res := s.syncSourceList(ctx, false); res.Added > 0 || len(res.Errors) > 0 {
+				for _, e := range res.Errors {
+					log.Printf("source list: %s", e)
+				}
+			}
+		}
 	}
 
 	remoteApps, fetchErr := s.source.FetchApps(ctx)

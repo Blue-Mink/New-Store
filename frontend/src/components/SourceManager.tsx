@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { fetchSources, addSourcesBatch, removeSource, syncSource, type SourceEntry } from '../api/client';
+import { fetchSources, addSourcesBatch, removeSource, syncSource, syncSourceList, fetchSettings, updateSettings, type SourceEntry } from '../api/client';
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Plus, Trash2, ExternalLink, Link2, RefreshCw } from 'lucide-react'
+import { Switch } from "@/components/ui/switch"
+import { Loader2, Plus, Trash2, ExternalLink, Link2, RefreshCw, ListTree } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface SourceManagerProps {
@@ -17,6 +18,11 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
   const [adding, setAdding] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  // 内置源列表自动同步
+  const [listUrl, setListUrl] = useState('');
+  const [listAuto, setListAuto] = useState(true);
+  const [syncingList, setSyncingList] = useState(false);
+  const [savingList, setSavingList] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -31,7 +37,84 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
 
   useEffect(() => {
     load();
+    fetchSettings()
+      .then((s) => {
+        setListUrl(s.source_list_url || '');
+        setListAuto(!(s.source_list_disabled ?? false));
+      })
+      .catch(() => {});
   }, [load]);
+
+  // 保存源列表设置（带上现有设置全量回传，避免覆盖其它配置）
+  const persistListSettings = useCallback(async (url?: string, auto?: boolean) => {
+    const cur = await fetchSettings();
+    await updateSettings({
+      check_interval_hours: cur.check_interval_hours,
+      mirror: cur.mirror,
+      docker_mirror: cur.docker_mirror,
+      custom_github_mirror: cur.custom_github_mirror,
+      custom_docker_mirror: cur.custom_docker_mirror,
+      install_volume: cur.install_volume,
+      source_list_url: (url ?? listUrl).trim() || undefined,
+      source_list_disabled: !(auto ?? listAuto),
+    });
+  }, [listUrl, listAuto]);
+
+  const handleListAutoChange = async (v: boolean) => {
+    setListAuto(v);
+    setSavingList(true);
+    try {
+      await persistListSettings(undefined, v);
+      toast.success(v ? '已开启源列表自动同步' : '已关闭源列表自动同步');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '保存设置失败');
+    } finally {
+      setSavingList(false);
+    }
+  };
+
+  const handleSaveListUrl = async () => {
+    setSavingList(true);
+    try {
+      await persistListSettings();
+      toast.success('源列表地址已保存');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '保存设置失败');
+    } finally {
+      setSavingList(false);
+    }
+  };
+
+  const handleSyncList = async () => {
+    setSyncingList(true);
+    try {
+      // 先落盘当前地址/开关，再触发同步
+      try {
+        await persistListSettings();
+      } catch {
+        /* 保存失败不阻断同步 */
+      }
+      const res = await syncSourceList();
+      if (res.added > 0) {
+        toast.success(
+          `源列表同步完成：${res.fetched} 个条目，新增 ${res.added} 个源` +
+            (res.added_names?.length ? `（${res.added_names.join('、')}）` : '')
+        );
+      } else {
+        toast.success(`源列表同步完成：${res.fetched} 个条目，没有新源`);
+      }
+      if (res.failed > 0) {
+        const errs = (res.errors || []).slice(0, 3).join('；');
+        toast.warning(`源列表同步：${res.failed} 个地址无效（${errs}${(res.errors || []).length > 3 ? '…' : ''}）`);
+      }
+      await load();
+      onCatalogChanged?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '同步源列表失败');
+    } finally {
+      setSyncingList(false);
+    }
+  };
 
   const lines = input.split('\n').map((l) => l.trim()).filter(Boolean);
 
@@ -99,6 +182,41 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium">应用源</h3>
         <span className="text-[11px] text-muted-foreground">FnDepot V1/V2</span>
+      </div>
+
+      {/* 源列表自动同步 */}
+      <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+            <ListTree className="h-3.5 w-3.5 text-muted-foreground" />
+            源列表自动同步
+          </div>
+          <Switch checked={listAuto} onCheckedChange={handleListAutoChange} disabled={savingList || syncingList} title="开启后每次目录检查自动添加列表中的新源" />
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            value={listUrl}
+            onChange={(e) => setListUrl(e.target.value)}
+            onBlur={handleSaveListUrl}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
+            placeholder="留空 = 内置社区源列表（710850609/FnDepot）"
+            className="min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs placeholder:text-muted-foreground/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0 gap-1.5"
+            onClick={handleSyncList}
+            disabled={syncingList || savingList}
+            title="立即抓取源列表并自动添加新源"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${syncingList ? 'animate-spin text-primary' : ''}`} />
+            {syncingList ? '同步中…' : '立即同步'}
+          </Button>
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          从源列表（每行一个 FnDepot 仓库地址）自动发现并添加新应用源；抓取走设置的 GitHub 加速镜像链。
+        </p>
       </div>
 
       {loading ? (
