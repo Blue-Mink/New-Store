@@ -70,7 +70,7 @@ const AppRowList: React.FC<AppRowListProps> = ({
         const canUpdate = isInstalled && app.has_update;
         return (
           <div
-            key={app.appname}
+            key={app.key || app.appname}
             className={cn(
               "flex items-center gap-3.5 p-4 cursor-pointer transition-colors hover:bg-muted/30 active:bg-muted/50",
               i > 0 && "border-t border-border/40"

@@ -232,6 +232,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="1">1 小时</SelectItem>
+                  <SelectItem value="3">3 小时</SelectItem>
                   <SelectItem value="6">6 小时</SelectItem>
                   <SelectItem value="12">12 小时</SelectItem>
                   <SelectItem value="24">24 小时</SelectItem>

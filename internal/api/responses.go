@@ -3,6 +3,9 @@ package api
 import "fnos-store/internal/diagnostics"
 
 type appResponse struct {
+	// Key 是注册表内部键（外部源应用为 appname@源名），前端用它做唯一标识与资源定位；
+	// 安装/更新/卸载仍用 appname（应用中心守护进程按 appname 管理）。
+	Key              string `json:"key"`
 	AppName          string `json:"appname"`
 	DisplayName      string `json:"display_name"`
 	Description      string `json:"description,omitempty"`

@@ -1,6 +1,8 @@
 import { apiUrl } from './base';
 
 export interface AppInfo {
+  /** 注册表内部键（外部源应用为 appname@源名）；同名应用共存时用它做唯一标识。 */
+  key: string;
   appname: string;
   display_name: string;
   description?: string;
@@ -392,6 +394,18 @@ export const addSourcesBatch = async (
     throw new Error(await extractError(response, `批量添加应用源失败: ${response.statusText}`));
   }
   return response.json();
+};
+
+/** 手动同步单个外部源（立即抓取，返回最新应用数）。 */
+export const syncSource = async (id: string): Promise<SourceEntry> => {
+  const response = await fetch(apiUrl(`/api/sources/${encodeURIComponent(id)}/sync`), {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error(await extractError(response, `同步应用源失败: ${response.statusText}`));
+  }
+  const body = await response.json();
+  return body.source as SourceEntry;
 };
 
 export const removeSource = async (id: string): Promise<void> => {

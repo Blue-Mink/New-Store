@@ -47,6 +47,7 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 		}
 
 		respApps = append(respApps, appResponse{
+			Key:                 app.AppKey(),
 			AppName:             app.AppName,
 			DisplayName:         app.DisplayName,
 			Description:         app.Description,

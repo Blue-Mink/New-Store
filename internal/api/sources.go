@@ -188,3 +188,37 @@ func (s *Server) handleRemoveSource(w http.ResponseWriter, r *http.Request) {
 	go s.refreshRegistryDebounced(context.Background())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
+
+// handleSyncSource 手动同步单个外部源：立即抓取全部目录（内置+外部源），
+// 返回该源最新的应用数与状态。
+func (s *Server) handleSyncSource(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeAPIError(w, http.StatusBadRequest, "缺少源 ID")
+		return
+	}
+	cfg := s.configMgr.Get()
+	found := false
+	for _, entry := range cfg.Sources {
+		if entry.ID == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeAPIError(w, http.StatusNotFound, "应用源不存在")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
+	defer cancel()
+	_ = s.refreshRegistry(ctx)
+
+	for _, e := range s.ListSources() {
+		if e.ID == id {
+			writeJSON(w, http.StatusOK, map[string]any{"source": e})
+			return
+		}
+	}
+	writeAPIError(w, http.StatusInternalServerError, "同步完成但未找到源状态")
+}

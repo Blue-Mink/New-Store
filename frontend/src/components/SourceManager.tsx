@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { fetchSources, addSourcesBatch, removeSource, type SourceEntry } from '../api/client';
+import { fetchSources, addSourcesBatch, removeSource, syncSource, type SourceEntry } from '../api/client';
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Plus, Trash2, ExternalLink, Link2 } from 'lucide-react'
+import { Loader2, Plus, Trash2, ExternalLink, Link2, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface SourceManagerProps {
@@ -16,6 +16,7 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
   const [input, setInput] = useState('');
   const [adding, setAdding] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -75,6 +76,24 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
     }
   };
 
+  const handleSync = async (src: SourceEntry) => {
+    setSyncingId(src.id);
+    try {
+      const updated = await syncSource(src.id);
+      if (updated.error) {
+        toast.error(`源「${src.name}」同步失败：${updated.error}`);
+      } else {
+        toast.success(`源「${src.name}」同步完成，${updated.app_count} 个应用`);
+      }
+      await load();
+      onCatalogChanged?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '同步应用源失败');
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -126,12 +145,23 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
                   <div className="mt-0.5 truncate text-[11px] text-red-500">{src.error}</div>
                 )}
               </div>
+              {/* 手动同步（圆形箭头，同步中转圈） */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 shrink-0 rounded-full p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                onClick={() => handleSync(src)}
+                disabled={syncingId === src.id || removingId === src.id}
+                title="立即同步该应用源"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${syncingId === src.id ? 'animate-spin text-primary' : ''}`} />
+              </Button>
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-7 w-7 shrink-0 p-0 text-muted-foreground hover:text-red-500"
                 onClick={() => handleRemove(src)}
-                disabled={removingId === src.id}
+                disabled={removingId === src.id || syncingId === src.id}
                 title="移除应用源"
               >
                 {removingId === src.id ? (

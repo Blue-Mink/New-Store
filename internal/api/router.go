@@ -122,6 +122,7 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/sources", s.handleAddSource)
 	s.Mux.HandleFunc("POST /api/sources/batch", s.handleBatchAddSources)
 	s.Mux.HandleFunc("DELETE /api/sources/{id}", s.handleRemoveSource)
+	s.Mux.HandleFunc("POST /api/sources/{id}/sync", s.handleSyncSource)
 	s.Mux.HandleFunc("GET /api/store-update", s.handleGetStoreUpdate)
 	s.Mux.HandleFunc("POST /api/store-update", s.handlePostStoreUpdate)
 	s.Mux.HandleFunc("POST /api/mirrors/check", s.handleCheckMirrors)

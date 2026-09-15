@@ -15,6 +15,15 @@ const (
 	AppStatusUpdateAvailable   AppStatus = "update_available"
 )
 
+// AppKey 返回注册表内部键：外部源应用为 appname@源名（允许与内置目录同名共存），
+// 内置目录（fnos-apps）保持裸 appname。
+func (a AppInfo) AppKey() string {
+	if a.Source != "" && a.Source != "fnos-apps" {
+		return a.AppName + "@" + a.Source
+	}
+	return a.AppName
+}
+
 type AppInfo struct {
 	AppName     string
 	DisplayName string
@@ -146,7 +155,7 @@ func (r *Registry) Merge(local []Manifest, remote []source.RemoteApp, installedT
 			}
 		}
 
-		r.apps[app.AppName] = app
+		r.apps[app.AppKey()] = app
 		result = append(result, app)
 	}
 
@@ -169,8 +178,25 @@ func (r *Registry) List() []AppInfo {
 }
 
 func (r *Registry) Get(appname string) (AppInfo, bool) {
-	app, ok := r.apps[appname]
-	return app, ok
+	// 优先按内部键（appname 或 appname@源名）精确命中；
+	// 回退按裸 appname 扫描（内置目录优先），兼容只传 appname 的旧调用。
+	if app, ok := r.apps[appname]; ok {
+		return app, ok
+	}
+	var fallback AppInfo
+	hasFallback := false
+	for _, app := range r.apps {
+		if app.AppName != appname {
+			continue
+		}
+		if !hasFallback || app.Source == "fnos-apps" {
+			fallback, hasFallback = app, true
+			if app.Source == "fnos-apps" {
+				break
+			}
+		}
+	}
+	return fallback, hasFallback
 }
 
 func hasRevisionUpdate(releaseTag, installedVersion string) bool {

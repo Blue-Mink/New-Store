@@ -72,7 +72,7 @@ const AppList: React.FC<AppListProps> = ({ apps, loading, onInstall, onUpdate, o
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
       {apps.map((app) => (
         <AppCard
-          key={app.appname}
+          key={app.key || app.appname}
           app={app}
           operation={appOperations?.get(app.appname)}
           onInstall={onInstall}

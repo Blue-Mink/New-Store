@@ -29,20 +29,12 @@ func (s *Server) refreshRegistry(ctx context.Context) error {
 
 	remoteApps, fetchErr := s.source.FetchApps(ctx)
 
-	// FnDepot 外部源：并发抓取，与内置目录合并（内置 appname 优先）。
+	// FnDepot 外部源：并发抓取，与内置目录合并。
+	// 同名应用（appname 相同）全部保留：注册表用 appname@源名 区分，
+	// 内置目录与外部源的同名应用会同时展示。
 	customApps, customStatus := s.fetchCustomSources(ctx)
 	if customApps != nil {
-		seen := make(map[string]bool, len(remoteApps))
-		combined := append([]source.RemoteApp{}, remoteApps...)
-		for _, a := range combined {
-			seen[a.AppName] = true
-		}
-		for _, a := range customApps {
-			if !seen[a.AppName] {
-				combined = append(combined, a)
-			}
-		}
-		remoteApps = combined
+		remoteApps = append(remoteApps, customApps...)
 	}
 
 	var installedTags map[string]string

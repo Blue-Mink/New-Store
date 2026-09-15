@@ -87,7 +87,7 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
     let cancelled = false;
     setReadme(null);
     setReadmeError(false);
-    fetch(assetUrl(app.appname, 'readme'))
+    fetch(assetUrl(app.key || app.appname, 'readme'))
       .then((r) => {
         if (!r.ok) throw new Error(r.statusText);
         return r.text();
@@ -95,7 +95,7 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
       .then((text) => { if (!cancelled) setReadme(text); })
       .catch(() => { if (!cancelled) setReadmeError(true); });
     return () => { cancelled = true; };
-  }, [app?.appname, open, app?.has_readme]);
+  }, [app?.key, open, app?.has_readme]);
 
   if (!app) return null;
 
@@ -136,9 +136,11 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg max-h-[88vh] overflow-y-auto [&>button.absolute]:top-3 [&>button.absolute]:right-3">
-        <DialogHeader>
-          <div className="flex items-center gap-3">
+      <DialogContent className="sm:max-w-lg w-full max-h-[92vh] sm:max-h-[88vh] flex flex-col !p-0 gap-0 overflow-hidden [&>button.absolute]:top-3 [&>button.absolute]:right-3">
+        {/* 固定头部：应用信息 + 右上角关闭按钮，不随内容滚动 */}
+        <div className="shrink-0 border-b border-border/60 bg-background px-4 pt-4 pb-3 sm:px-5 sm:pt-5">
+          <DialogHeader className="space-y-0">
+          <div className="flex items-center gap-3 pr-8">
             {app.icon_url ? (
               <img
                 src={app.icon_url}
@@ -208,8 +210,10 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
               </div>
             </div>
           </div>
-        </DialogHeader>
-
+          </DialogHeader>
+        </div>
+        {/* 可滚动内容区：描述 / 预览 / 信息 / 更新说明 / README 竖排展示 */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 sm:px-5">
         {app.description && (
           <>
             <DialogDescription className="text-sm leading-relaxed">
@@ -235,7 +239,7 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
                   title="点击放大"
                 >
                   <img
-                    src={assetUrl(app.appname, 'preview', i)}
+                    src={assetUrl(app.key || app.appname, 'preview', i)}
                     alt={`${app.display_name} 预览 ${i + 1}`}
                     loading="lazy"
                     className="h-28 w-auto object-cover max-w-[220px] bg-muted/40"
@@ -326,7 +330,7 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
               <FileText className="h-3.5 w-3.5" />
               更新说明
             </div>
-            <p className="text-sm text-foreground/90 whitespace-pre-wrap leading-relaxed">{app.changelog}</p>
+            <p className="text-sm text-foreground/90 whitespace-pre-wrap break-words leading-relaxed">{app.changelog}</p>
           </>
         )}
 
@@ -362,14 +366,14 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
 
         <Separator />
 
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <Button
             size="sm"
             variant="ghost"
             asChild
             className="rounded-full px-4"
           >
-            <a href={apiUrl(`/api/apps/${app.appname}/download`)} download>
+            <a href={apiUrl(`/api/apps/${app.key || app.appname}/download`)} download>
               <Download className="mr-1.5 h-3.5 w-3.5" />
               下载 fpk
             </a>
@@ -437,6 +441,7 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
             </>
           ) : null}
         </div>
+        </div>
       </DialogContent>
 
       {/* 预览图灯箱 */}
@@ -457,7 +462,7 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
             <ChevronLeft className="h-8 w-8" />
           </button>
           <img
-            src={assetUrl(app.appname, 'preview', lightbox)}
+            src={assetUrl(app.key || app.appname, 'preview', lightbox)}
             alt={`${app.display_name} 预览 ${lightbox + 1}`}
             className="max-w-full max-h-full object-contain rounded-lg"
             onClick={(e) => e.stopPropagation()}
