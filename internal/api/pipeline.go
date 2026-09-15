@@ -61,10 +61,12 @@ func (p *installPipeline) extractFpk(fpkPath string) (string, error) {
 	return dir, nil
 }
 
-// isGitHubDownloadURL 判断下载地址是否指向 GitHub（内置目录的 Release 地址）。
-// 只有 GitHub 地址才适用 GitHub 镜像前缀；FnDepot 外部源的直链地址必须直连。
+// isGitHubDownloadURL 判断下载地址是否指向 GitHub（内置目录的 Release 地址、
+// raw.githubusercontent.com 的 FnDepot 仓库源文件）。
+// 只有 GitHub 地址才适用 GitHub 镜像前缀；FnDepot 外部源的非 GitHub 直链必须直连。
 func isGitHubDownloadURL(rawURL string) bool {
-	return strings.Contains(rawURL, "github.com")
+	return strings.Contains(rawURL, "github.com/") ||
+		strings.Contains(rawURL, "raw.githubusercontent.com/")
 }
 
 func (p *installPipeline) downloadFpk(ctx context.Context, stream *sseStream, app core.AppInfo) (string, error) {

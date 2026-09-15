@@ -49,8 +49,8 @@ func (s *Server) handleAddSource(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "源地址不能为空")
 	}
 
-	// 立即验证：可抓取且是 FnDepot V1/V2 结构（可能需数秒，含 GitHub 仓库解析）
-	cs, err := source.NewFNDepotSource(req.URL)
+	// 立即验证：可抓取且是 FnDepot V1/V2 结构（可能需数秒，含 GitHub 仓库解析与镜像回退）
+	cs, err := source.NewFNDepotSource(req.URL, s.configMgr)
 	if err != nil {
 		writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
 		return

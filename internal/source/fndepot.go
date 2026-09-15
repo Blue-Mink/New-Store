@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"fnos-store/internal/config"
 	"fnos-store/internal/platform"
 )
 
@@ -29,6 +30,7 @@ const fndepotFetchTimeout = 25 * time.Second
 // FNDepotSource 实现 Source 接口，把 FnDepot 外部源翻译成 RemoteApp 列表。
 type FNDepotSource struct {
 	httpClient *http.Client
+	configMgr  *config.Manager // 提供 GitHub 镜像链（raw.githubusercontent.com 抓取走镜像回退）
 	sourceURL  string     // 用户填写的原始地址
 	jsonURL    string     // 解析后的 JSON 地址
 	fallbacks  []string   // GitHub 仓库模式的分支回退地址
@@ -126,7 +128,7 @@ func fndepotPlatformOK(declared json.RawMessage, current string) bool {
 }
 
 // NewFNDepotSource 解析并验证用户填写的源地址（立即 fetch+parse）。
-func NewFNDepotSource(rawURL string) (*FNDepotSource, error) {
+func NewFNDepotSource(rawURL string, configMgr *config.Manager) (*FNDepotSource, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		return nil, fmt.Errorf("源地址为空")
@@ -142,23 +144,24 @@ func NewFNDepotSource(rawURL string) (*FNDepotSource, error) {
 	client := &http.Client{Timeout: fndepotFetchTimeout}
 	s := &FNDepotSource{
 		httpClient: client,
+		configMgr:  configMgr,
 		sourceURL:  rawURL,
 		id:         fndepotSourceID(rawURL),
 	}
 
 	jsonURL, fallbacks := resolveJSONURL(u)
 	var lastErr error
-	for _, candidate := range append([]string{jsonURL}, fallbacks...) {
+	for _, candidate := range s.fetchCandidates(jsonURL, fallbacks) {
 		body, fetchErr := httpGetJSON(candidate, client)
 		if fetchErr != nil {
 			lastErr = fetchErr
 			continue
 		}
-		if err := s.parse(body, candidate); err != nil {
+		if err := s.parse(body, jsonURL); err != nil {
 			lastErr = err
 			continue
 		}
-		s.jsonURL = candidate
+		s.jsonURL = jsonURL
 		s.fallbacks = fallbacks
 		return s, nil
 	}
@@ -178,9 +181,36 @@ func resolveJSONURL(u *url.URL) (string, []string) {
 	return u.String(), nil
 }
 
+// fetchCandidates 返回按优先级排序的抓取候选列表。
+// GitHub 仓库源（raw.githubusercontent.com）：直连优先（很多环境经代理可直连，
+// 且直连实测比公共镜像更稳）→ GitHub 镜像链 → 分支回退直连。
+// 用户 JSON 直链：原样抓取一次 + 重试一次（应对瞬时网络抖动）。
+// 注意返回的是「抓取用 URL」，源逻辑地址（jsonURL）保持无镜像前缀。
+func (s *FNDepotSource) fetchCandidates(jsonURL string, fallbacks []string) []string {
+	if !strings.Contains(jsonURL, "raw.githubusercontent.com") {
+		return []string{jsonURL, jsonURL}
+	}
+	out := []string{jsonURL}
+	cfg := config.Config{Mirror: config.DefaultMirror}
+	if s.configMgr != nil {
+		cfg = s.configMgr.Get()
+	}
+	for _, prefix := range config.GitHubFallbackPrefixes(cfg.Mirror, cfg) {
+		if prefix != "" { // 直连（"" 前缀）已在首位
+			out = append(out, prefix+jsonURL)
+		}
+	}
+	out = append(out, fallbacks...)
+	return out
+}
+
+// fetchCandidateTimeout 是单个抓取候选的独立超时（镜像链中每个候选各自计时，
+// 避免总超时被前面失败的候选耗光）。
+const fetchCandidateTimeout = 15 * time.Second
+
 // NewFNDepotSourceLazy 只做地址解析（离线），不立即抓取 JSON。
 // 用于启动/配置变更时重建源列表；可达性在 FetchApps 时验证。
-func NewFNDepotSourceLazy(rawURL string) (*FNDepotSource, error) {
+func NewFNDepotSourceLazy(rawURL string, configMgr *config.Manager) (*FNDepotSource, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		return nil, fmt.Errorf("源地址为空")
@@ -195,6 +225,7 @@ func NewFNDepotSourceLazy(rawURL string) (*FNDepotSource, error) {
 	jsonURL, fallbacks := resolveJSONURL(u)
 	return &FNDepotSource{
 		httpClient: &http.Client{Timeout: fndepotFetchTimeout},
+		configMgr:  configMgr,
 		sourceURL:  rawURL,
 		jsonURL:    jsonURL,
 		fallbacks:  fallbacks,
@@ -278,23 +309,26 @@ func (s *FNDepotSource) JSONURL() string { return s.jsonURL }
 
 // FetchApps 实现 Source：抓取源 JSON 并翻译为 RemoteApp（按当前架构过滤）。
 func (s *FNDepotSource) FetchApps(ctx context.Context) ([]RemoteApp, error) {
-	candidates := append([]string{s.jsonURL}, s.fallbacks...)
+	candidates := s.fetchCandidates(s.jsonURL, s.fallbacks)
 	var lastErr error
 	var body []byte
-	fetchedFrom := s.jsonURL
 	for _, candidate := range candidates {
-		req, err := http.NewRequestWithContext(ctx, "GET", candidate, nil)
+		cctx, cancel := context.WithTimeout(ctx, fetchCandidateTimeout)
+		req, err := http.NewRequestWithContext(cctx, "GET", candidate, nil)
 		if err != nil {
+			cancel()
 			return nil, err
 		}
 		req.Header.Set("User-Agent", "fnos-store/1.x")
 		resp, err := s.httpClient.Do(req)
 		if err != nil {
+			cancel()
 			lastErr = err
 			continue
 		}
 		rb, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 		resp.Body.Close()
+		cancel()
 		if err != nil {
 			lastErr = err
 			continue
@@ -304,7 +338,6 @@ func (s *FNDepotSource) FetchApps(ctx context.Context) ([]RemoteApp, error) {
 			continue
 		}
 		body = rb
-		fetchedFrom = candidate
 		break
 	}
 	if body == nil {
@@ -314,7 +347,7 @@ func (s *FNDepotSource) FetchApps(ctx context.Context) ([]RemoteApp, error) {
 	appsMap, _ := decodeFndepotApps(body)
 	apps := make([]RemoteApp, 0, len(appsMap))
 	for appName, entry := range appsMap {
-		if ra, ok := translateFndepotApp(appName, entry, fetchedFrom, s.Name()); ok {
+		if ra, ok := translateFndepotApp(appName, entry, s.jsonURL, s.Name()); ok {
 			apps = append(apps, ra)
 		}
 	}

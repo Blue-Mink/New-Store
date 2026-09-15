@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -297,7 +298,7 @@ func TestNewFNDepotSource_EndToEnd(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s, err := NewFNDepotSource(srv.URL + "/fnpack.json")
+	s, err := NewFNDepotSource(srv.URL+"/fnpack.json", nil)
 	if err != nil {
 		t.Fatalf("NewFNDepotSource: %v", err)
 	}
@@ -335,14 +336,52 @@ func TestNewFNDepotSource_Invalid(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := NewFNDepotSource(srv.URL + "/bad.json"); err == nil {
+	if _, err := NewFNDepotSource(srv.URL+"/bad.json", nil); err == nil {
 		t.Error("非 FnDepot 结构的 JSON 应报错")
 	}
-	if _, err := NewFNDepotSource("ftp://nope/x.json"); err == nil {
+	if _, err := NewFNDepotSource("ftp://nope/x.json", nil); err == nil {
 		t.Error("非法 scheme 应报错")
 	}
-	if _, err := NewFNDepotSource(""); err == nil {
+	if _, err := NewFNDepotSource("", nil); err == nil {
 		t.Error("空地址应报错")
+	}
+}
+
+func TestFetchCandidates_MirrorChain(t *testing.T) {
+	s := &FNDepotSource{} // configMgr 为 nil → 默认镜像 gh-proxy
+	head := "https://raw.githubusercontent.com/o/r/HEAD/fnpack.json"
+	main := "https://raw.githubusercontent.com/o/r/main/fnpack.json"
+	master := "https://raw.githubusercontent.com/o/r/master/fnpack.json"
+	out := s.fetchCandidates(head, []string{main, master})
+	if len(out) < 3 {
+		t.Fatalf("候选过少: %v", out)
+	}
+	// 直连 HEAD 在最前
+	if out[0] != head {
+		t.Errorf("首候选应为直连 HEAD: %s", out[0])
+	}
+	// 镜像链包含默认镜像前缀
+	hasMirror := false
+	for _, c := range out {
+		if strings.HasPrefix(c, "https://gh-proxy.com/"+head) {
+			hasMirror = true
+		}
+	}
+	if !hasMirror {
+		t.Errorf("候选链应包含镜像前缀: %v", out)
+	}
+	// 分支回退在最后
+	if out[len(out)-2] != main || out[len(out)-1] != master {
+		t.Errorf("末两候选应为 main/master 分支回退: %v", out[len(out)-2:])
+	}
+}
+
+func TestFetchCandidates_DirectLink(t *testing.T) {
+	s := &FNDepotSource{}
+	out := s.fetchCandidates("https://cdn.example.com/s.json", nil)
+	// 直链：原样 + 一次重试
+	if len(out) != 2 || out[0] != "https://cdn.example.com/s.json" || out[1] != "https://cdn.example.com/s.json" {
+		t.Errorf("JSON 直链应为原样+重试: %v", out)
 	}
 }
 

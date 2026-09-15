@@ -29,6 +29,9 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 		releaseURL := ""
 		if app.ReleaseTag != "" {
 			releaseURL = fmt.Sprintf("https://github.com/conversun/fnos-apps/releases/tag/%s", app.ReleaseTag)
+		} else if app.DownloadURL != "" {
+			// 外部 FnDepot 源应用：无 GitHub ReleaseTag，release_url 指向实际下载地址
+			releaseURL = app.DownloadURL
 		}
 
 		hasUpdate := app.Status == core.AppStatusUpdateAvailable
@@ -66,6 +69,7 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 			AppType:             app.AppType,
 			Category:            app.Category,
 			PostInstallNote:     app.PostInstallNote,
+			Source:              app.Source,
 		})
 	}
 

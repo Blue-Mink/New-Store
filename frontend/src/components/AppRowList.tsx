@@ -133,7 +133,8 @@ const AppRowList: React.FC<AppRowListProps> = ({
                     </span>
                   </>
                 )}
-                {app.source && (
+                {/* 内置目录应用 source=fnos-apps，不显示；仅外部 FnDepot 源应用标注来源 */}
+                {app.source && app.source !== 'fnos-apps' && (
                   <>
                     <span className="text-muted-foreground/30">·</span>
                     <span className="inline-flex items-center gap-0.5 text-primary/80" title={`来源：${app.source}`}>

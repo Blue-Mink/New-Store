@@ -189,7 +189,7 @@ func (s *Server) rebuildCustomSources() {
 	cfg := s.configMgr.Get()
 	srcs := make([]*source.FNDepotSource, 0, len(cfg.Sources))
 	for _, entry := range cfg.Sources {
-		cs, err := source.NewFNDepotSourceLazy(entry.URL)
+		cs, err := source.NewFNDepotSourceLazy(entry.URL, s.configMgr)
 		if err != nil {
 			continue // 无效地址在源列表 API 中按错误展示
 		}
@@ -219,7 +219,9 @@ func (s *Server) fetchCustomSources(ctx context.Context) ([]source.RemoteApp, ma
 	ch := make(chan customResult, len(srcs))
 	for _, cs := range srcs {
 		go func(cs *source.FNDepotSource) {
-			cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			// 父预算要覆盖整条候选链（直连重试+镜像+分支回退，单候选 15s），
+			// 否则前面候选耗光预算后，后面的直接 context deadline exceeded。
+			cctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 			defer cancel()
 			apps, err := cs.FetchApps(cctx)
 			ch <- customResult{cs.ID(), apps, err}
