@@ -71,7 +71,7 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
 
   return (
     <Card className={cn(
-      "relative overflow-hidden border border-border/30 bg-card shadow-[0_1px_3px_0_rgb(0_0_0/0.04)] rounded-xl",
+      "relative overflow-hidden border border-border/20 bg-card shadow-appstore rounded-[18px] transition-all duration-200 hover:shadow-appstore-hover hover:-translate-y-0.5",
       operation && "border-primary/50"
     )}>
       <div className="p-4 flex flex-col h-full gap-3">
@@ -82,11 +82,11 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
               <img
                 src={app.icon_url}
                 alt={app.display_name}
-                className="w-11 h-11 rounded-xl object-cover bg-background dark:bg-muted/60 dark:ring-1 dark:ring-border/50"
+                className="w-14 h-14 squircle object-cover bg-muted/40"
               />
             ) : (
-              <div className="w-11 h-11 bg-muted/60 rounded-xl flex items-center justify-center text-muted-foreground">
-                <Package className="h-5 w-5 opacity-40" />
+              <div className="w-14 h-14 bg-muted/60 squircle flex items-center justify-center text-muted-foreground">
+                <Package className="h-6 w-6 opacity-40" />
               </div>
             )}
           </div>
@@ -94,11 +94,11 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
           <div className="flex-1 min-w-0 flex flex-col gap-0.5">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 min-w-0">
-                <h3 className="font-semibold text-sm leading-tight text-foreground truncate" title={app.display_name}>
+                <h3 className="font-semibold text-[15px] leading-tight text-foreground truncate" title={app.display_name}>
                   {app.display_name}
                 </h3>
                 {app.app_type === 'docker' && (
-                  <Container className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                  <Container className="h-3.5 w-3.5 text-primary shrink-0" />
                 )}
               </div>
               {canUpdate && (
@@ -113,6 +113,11 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
                 </Badge>
               )}
             </div>
+
+            {/* App Store 风格的「开发者」行：用应用 id 充当开发者 */}
+            <p className="text-xs text-muted-foreground/80 truncate" title={app.appname}>
+              {app.appname}
+            </p>
 
             <div className="flex items-center flex-wrap gap-x-1.5 text-xs text-muted-foreground">
               <span>v{isInstalled ? installedVersionLabel(app) : app.latest_version}</span>
@@ -204,28 +209,26 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
                   disabled={!!operation}
                   aria-label={`卸载 ${app.display_name}`}
                   title="卸载"
-                  className="rounded-full h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                  className="rounded-full h-8 w-8 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  <Trash2 className="h-4 w-4" />
                 </Button>
               )}
               {!isInstalled ? (
                 <Button
-                  size="sm"
                   onClick={() => onInstall(app)}
-                  className="rounded-full px-3.5 h-7 text-xs font-medium"
+                  className="pill bg-primary text-primary-foreground px-4 h-8 text-[13px] font-semibold shadow-sm hover:opacity-90"
                 >
                   <Download className="mr-1 h-3.5 w-3.5" />
                   安装
                 </Button>
               ) : canUpdate ? (
                 <Button
-                  size="sm"
                   onClick={() => onUpdate(app)}
                   variant="outline"
                   disabled={!upgradeAllowed}
                   title={upgradeAllowed ? undefined : '当前 fnOS 版本的更新通道会删除应用数据，请在系统应用中心手动安装 fpk'}
-                  className="rounded-full px-3.5 h-7 text-xs font-medium border-primary text-primary hover:bg-primary/10 disabled:border-muted disabled:text-muted-foreground"
+                  className="pill h-8 px-4 text-[13px] font-semibold border-primary/50 text-primary hover:bg-primary/10 hover:text-primary disabled:border-muted disabled:text-muted-foreground"
                 >
                   <RefreshCw className="mr-1 h-3.5 w-3.5" />
                   {upgradeAllowed ? '更新' : '需手动更新'}

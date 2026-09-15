@@ -9,6 +9,8 @@ import ProgressOverlay from './components/ProgressOverlay';
 import SettingsDialog from './components/SettingsDialog';
 import WizardDialog from './components/WizardDialog';
 import RecommendedAppCard from './components/RecommendedAppCard';
+import FeaturedShowcase from './components/FeaturedShowcase';
+import ThemeToggle from './components/ThemeToggle';
 import { fetchApps, triggerCheck, installApp, updateApp, uninstallApp, fetchStatus, fetchStoreUpdate, triggerStoreUpdate, reloadApps, ignoreUpdate, unignoreUpdate, fetchRecommended, fetchWizard } from './api/client';
 import type { AppInfo, AppOperation, SSECallback, RecommendedApp, AppWizard, WizardParam } from './api/client';
 import { toast } from "sonner"
@@ -591,7 +593,7 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row">
       <aside className={cn(
-        "hidden md:flex flex-col bg-card border-r border-border h-screen sticky top-0 transition-all duration-300 overflow-hidden",
+        "hidden md:flex flex-col bg-card/70 backdrop-blur-xl border-r border-border/50 h-screen sticky top-0 transition-all duration-300 overflow-hidden",
         sidebarCollapsed ? "w-[68px]" : "w-64"
       )}>
         <TooltipProvider delayDuration={0}>
@@ -620,8 +622,8 @@ const App: React.FC = () => {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  variant={activeFilter === 'recommended' ? 'secondary' : 'ghost'}
-                  className={cn("w-full h-10 shadow-none text-blue-600 hover:text-blue-700 dark:text-blue-500 dark:hover:text-blue-400", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
+                  variant={activeFilter === 'recommended' ? 'default' : 'ghost'}
+                  className={cn("w-full h-10 shadow-none rounded-lg font-medium", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
                   onClick={() => { setActiveFilter('recommended'); setActiveCategory(null); }}
                 >
                   <Compass className={cn("h-4 w-4 shrink-0", !sidebarCollapsed && "mr-3")} />
@@ -638,15 +640,15 @@ const App: React.FC = () => {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  variant={activeFilter === 'all' ? 'secondary' : 'ghost'}
-                  className={cn("w-full h-10 shadow-none", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
+                  variant={activeFilter === 'all' ? 'default' : 'ghost'}
+                  className={cn("w-full h-10 shadow-none rounded-lg font-medium", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
                   onClick={() => setActiveFilter('all')}
                 >
                   <LayoutGrid className={cn("h-4 w-4 shrink-0", !sidebarCollapsed && "mr-3")} />
                   {!sidebarCollapsed && (
                     <>
                       <span className="flex-1 text-left whitespace-nowrap">全部</span>
-                      <span className="ml-auto text-xs text-muted-foreground tabular-nums">{counts.all}</span>
+                      <span className={cn("ml-auto text-xs tabular-nums", activeFilter === 'all' ? "text-white/80" : "text-muted-foreground")}>{counts.all}</span>
                     </>
                   )}
                 </Button>
@@ -656,15 +658,15 @@ const App: React.FC = () => {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  variant={activeFilter === 'installed' ? 'secondary' : 'ghost'}
-                  className={cn("w-full h-10 shadow-none", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
+                  variant={activeFilter === 'installed' ? 'default' : 'ghost'}
+                  className={cn("w-full h-10 shadow-none rounded-lg font-medium", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
                   onClick={() => setActiveFilter('installed')}
                 >
                   <CheckCircle2 className={cn("h-4 w-4 shrink-0", !sidebarCollapsed && "mr-3")} />
                   {!sidebarCollapsed && (
                     <>
                       <span className="flex-1 text-left whitespace-nowrap">已安装</span>
-                      <span className="ml-auto text-xs text-muted-foreground tabular-nums">{counts.installed}</span>
+                      <span className={cn("ml-auto text-xs tabular-nums", activeFilter === 'installed' ? "text-white/80" : "text-muted-foreground")}>{counts.installed}</span>
                     </>
                   )}
                 </Button>
@@ -674,8 +676,8 @@ const App: React.FC = () => {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  variant={activeFilter === 'update_available' ? 'secondary' : 'ghost'}
-                  className={cn("w-full h-10 shadow-none", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
+                  variant={activeFilter === 'update_available' ? 'default' : 'ghost'}
+                  className={cn("w-full h-10 shadow-none rounded-lg font-medium", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
                   onClick={() => setActiveFilter('update_available')}
                 >
                   <div className="relative shrink-0">
@@ -688,7 +690,12 @@ const App: React.FC = () => {
                     <>
                       <span className="flex-1 text-left whitespace-nowrap">有更新</span>
                       {counts.update_available > 0 ? (
-                        <Badge variant="destructive" className="ml-auto shrink-0">{counts.update_available}</Badge>
+                        <Badge
+                          variant={activeFilter === 'update_available' ? 'secondary' : 'destructive'}
+                          className={cn("ml-auto shrink-0", activeFilter === 'update_available' && "bg-white/25 text-white border-0")}
+                        >
+                          {counts.update_available}
+                        </Badge>
                       ) : (
                         <span className="ml-auto text-xs text-muted-foreground tabular-nums">0</span>
                       )}
@@ -796,7 +803,7 @@ const App: React.FC = () => {
        </aside>
 
       <div className="flex-1 flex flex-col min-h-0 md:min-h-screen">
-        <div className="md:hidden bg-card border-b border-border p-4 sticky top-0 z-20 flex flex-col gap-3">
+        <div className="md:hidden bg-card/70 backdrop-blur-xl border-b border-border/50 p-4 sticky top-0 z-20 flex flex-col gap-3">
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                     <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
@@ -815,8 +822,8 @@ const App: React.FC = () => {
                              <div className="flex-1 overflow-y-auto min-h-0">
                               <nav className="p-4 space-y-1">
                                  <Button
-                                   variant={activeFilter === 'recommended' ? 'secondary' : 'ghost'}
-                                   className="w-full justify-start h-10 px-3 shadow-none text-blue-600 hover:text-blue-700 dark:text-blue-500 dark:hover:text-blue-400"
+                                   variant={activeFilter === 'recommended' ? 'default' : 'ghost'}
+                                   className="w-full justify-start h-10 px-3 shadow-none rounded-lg font-medium"
                                    onClick={() => { setActiveFilter('recommended'); setActiveCategory(null); setMobileMenuOpen(false); }}
                                  >
                                     <Compass className="mr-3 h-4 w-4 shrink-0" />
@@ -824,17 +831,17 @@ const App: React.FC = () => {
                                     <span className="ml-auto text-xs opacity-80 tabular-nums">{counts.recommended}</span>
                                  </Button>
                                  <Button
-                                   variant={activeFilter === 'all' ? 'secondary' : 'ghost'}
-                                   className="w-full justify-start h-10 px-3 shadow-none"
+                                   variant={activeFilter === 'all' ? 'default' : 'ghost'}
+                                   className="w-full justify-start h-10 px-3 shadow-none rounded-lg font-medium"
                                    onClick={() => { setActiveFilter('all'); setMobileMenuOpen(false); }}
                                  >
                                     <LayoutGrid className="mr-3 h-4 w-4 shrink-0" />
                                     <span className="flex-1 text-left">全部</span>
-                                    <span className="ml-auto text-xs text-muted-foreground tabular-nums">{counts.all}</span>
+                                    <span className={cn("ml-auto text-xs tabular-nums", activeFilter === 'all' ? "text-white/80" : "text-muted-foreground")}>{counts.all}</span>
                                  </Button>
                                  <Button
-                                   variant={activeFilter === 'installed' ? 'secondary' : 'ghost'}
-                                   className="w-full justify-start h-10 px-3 shadow-none"
+                                   variant={activeFilter === 'installed' ? 'default' : 'ghost'}
+                                   className="w-full justify-start h-10 px-3 shadow-none rounded-lg font-medium"
                                    onClick={() => { setActiveFilter('installed'); setMobileMenuOpen(false); }}
                                  >
                                     <CheckCircle2 className="mr-3 h-4 w-4 shrink-0" />
@@ -842,14 +849,19 @@ const App: React.FC = () => {
                                     <span className="ml-auto text-xs text-muted-foreground tabular-nums">{counts.installed}</span>
                                  </Button>
                                  <Button
-                                   variant={activeFilter === 'update_available' ? 'secondary' : 'ghost'}
-                                   className="w-full justify-start h-10 px-3 shadow-none"
+                                   variant={activeFilter === 'update_available' ? 'default' : 'ghost'}
+                                   className="w-full justify-start h-10 px-3 shadow-none rounded-lg font-medium"
                                    onClick={() => { setActiveFilter('update_available'); setMobileMenuOpen(false); }}
                                  >
                                     <RefreshCw className="mr-3 h-4 w-4 shrink-0" />
                                     <span className="flex-1 text-left">有更新</span>
                                     {counts.update_available > 0 ? (
-                                      <Badge variant="destructive" className="ml-auto shrink-0">{counts.update_available}</Badge>
+                                      <Badge
+                                        variant={activeFilter === 'update_available' ? 'secondary' : 'destructive'}
+                                        className={cn("ml-auto shrink-0", activeFilter === 'update_available' && "bg-white/25 text-white border-0")}
+                                      >
+                                        {counts.update_available}
+                                      </Badge>
                                     ) : (
                                       <span className="ml-auto text-xs text-muted-foreground tabular-nums">0</span>
                                     )}
@@ -916,6 +928,7 @@ const App: React.FC = () => {
                     </Sheet>
                     <h1 className="text-xl font-bold">fnOS Apps</h1>
                 </div>
+                <ThemeToggle />
                 <Button
                   variant="ghost"
                   size="icon"
@@ -929,13 +942,13 @@ const App: React.FC = () => {
             {activeFilter !== 'recommended' && (
               <>
                 <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                   <Input
                     type="text"
                     placeholder="搜索应用..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-8 pr-8 h-9 shadow-none"
+                    className="w-full pl-9 pr-8 h-9 shadow-none rounded-full border-0 bg-muted/60 focus-visible:ring-primary/40"
                   />
                   {searchQuery && (
                     <button
@@ -947,7 +960,7 @@ const App: React.FC = () => {
                   )}
                 </div>
                 <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
-                  <SelectTrigger className="w-full h-9 shadow-none">
+                  <SelectTrigger className="w-full h-9 shadow-none rounded-full border-0 bg-muted/60">
                     <ArrowUpDown className="h-3.5 w-3.5 mr-1.5" />
                     <SelectValue />
                   </SelectTrigger>
@@ -962,27 +975,27 @@ const App: React.FC = () => {
             )}
         </div>
 
-        <header className="hidden md:flex bg-card border-b border-border px-8 py-4 justify-between items-center sticky top-0 z-10">
-           <h2 className="text-lg font-medium shrink-0">
-              {activeFilter === 'recommended' && '发现应用'}
-              {activeFilter === 'all' && '全部应用'}
-              {activeFilter === 'installed' && '已安装应用'}
+        <header className="hidden md:flex bg-card/70 backdrop-blur-xl border-b border-border/50 px-8 py-4 justify-between items-center sticky top-0 z-10">
+           <h2 className="text-2xl font-bold tracking-tight shrink-0">
+              {activeFilter === 'recommended' && '发现'}
+              {activeFilter === 'all' && '应用'}
+              {activeFilter === 'installed' && '已安装'}
               {activeFilter === 'update_available' && '可用更新'}
               {activeFilter !== 'recommended' && activeCategory && (
-                <span className="text-muted-foreground font-normal">{' · '}{CATEGORIES.find(c => c.key === activeCategory)?.label}</span>
+                <span className="text-muted-foreground font-normal text-xl">{' · '}{CATEGORIES.find(c => c.key === activeCategory)?.label}</span>
               )}
            </h2>
            <div className="flex items-center gap-3">
                {activeFilter !== 'recommended' && (
                  <>
                    <div className="relative">
-                     <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                     <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                      <Input
                        type="text"
                        placeholder="搜索应用..."
                        value={searchQuery}
                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-56 pl-8 pr-8 h-9 shadow-none"
+                       className="w-56 md:w-64 pl-9 pr-8 h-9 shadow-none rounded-full border-0 bg-muted/60 focus-visible:ring-primary/40"
                      />
                      {searchQuery && (
                        <button
@@ -994,7 +1007,7 @@ const App: React.FC = () => {
                      )}
                    </div>
                    <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
-                     <SelectTrigger className="w-32 h-9 shadow-none">
+                     <SelectTrigger className="w-32 h-9 shadow-none rounded-full border-0 bg-muted/60">
                        <ArrowUpDown className="h-3.5 w-3.5 mr-1.5" />
                        <SelectValue />
                      </SelectTrigger>
@@ -1007,9 +1020,11 @@ const App: React.FC = () => {
                    </Select>
                  </>
                )}
+               <ThemeToggle />
                <Button 
                  onClick={handleCheck} 
                  disabled={checking}
+                 className="rounded-full"
                >
                  {checking ? (
                    <>
@@ -1028,19 +1043,27 @@ const App: React.FC = () => {
 
         <main className="flex-grow p-4 md:p-8 overflow-y-auto">
           {activeFilter === 'recommended' ? (
-            recommendedApps.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {recommendedApps.map(app => (
-                  <RecommendedAppCard key={app.name} app={app} />
-                ))}
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-64">
-                <Compass className="h-12 w-12 text-muted-foreground/50 mb-4" />
-                <p className="text-muted-foreground font-medium">暂无推荐应用</p>
-                <p className="text-sm text-muted-foreground mt-1">请稍后再来看看</p>
-              </div>
-            )
+            <div className="space-y-10">
+              {apps.length > 0 && (
+                <FeaturedShowcase apps={apps} onDetail={setDetailApp} />
+              )}
+              {recommendedApps.length > 0 ? (
+                <section>
+                  <h2 className="text-lg font-bold tracking-tight mb-3">编辑推荐</h2>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    {recommendedApps.map(app => (
+                      <RecommendedAppCard key={app.name} app={app} />
+                    ))}
+                  </div>
+                </section>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-64">
+                  <Compass className="h-12 w-12 text-muted-foreground/50 mb-4" />
+                  <p className="text-muted-foreground font-medium">暂无推荐应用</p>
+                  <p className="text-sm text-muted-foreground mt-1">请稍后再来看看</p>
+                </div>
+              )}
+            </div>
           ) : loadStatus === 'loaded' ? (
             <AppList
                apps={filteredApps}
