@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { LayoutGrid, CheckCircle2, RefreshCw, Settings, MessageCircle, Menu, ChevronsLeft, ChevronsRight, Search, X, Film, ArrowDownToLine, BookOpen, Wrench, Globe, LayoutList, ArrowUpDown, Loader2, CircleX, CircleCheck, WifiOff, ExternalLink, Package, Compass, Brain, Clapperboard, Network } from 'lucide-react';
+import { LayoutGrid, CheckCircle2, RefreshCw, Settings, MessageCircle, ChevronsLeft, ChevronsRight, Search, X, Film, ArrowDownToLine, BookOpen, Wrench, Globe, LayoutList, ArrowUpDown, Loader2, CircleX, CircleCheck, WifiOff, ExternalLink, Package, Compass, Brain, Clapperboard, Network } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Badge } from './components/ui/badge';
@@ -11,6 +11,8 @@ import WizardDialog from './components/WizardDialog';
 import RecommendedAppCard from './components/RecommendedAppCard';
 import FeaturedShowcase from './components/FeaturedShowcase';
 import ThemeToggle from './components/ThemeToggle';
+import MobileDock from './components/MobileDock';
+import AppRowList from './components/AppRowList';
 import { fetchApps, triggerCheck, installApp, updateApp, uninstallApp, fetchStatus, fetchStoreUpdate, triggerStoreUpdate, reloadApps, ignoreUpdate, unignoreUpdate, fetchRecommended, fetchWizard } from './api/client';
 import type { AppInfo, AppOperation, SSECallback, RecommendedApp, AppWizard, WizardParam } from './api/client';
 import { toast } from "sonner"
@@ -22,7 +24,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import {
@@ -108,7 +109,6 @@ const App: React.FC = () => {
   const [detailApp, setDetailApp] = useState<AppInfo | null>(null);
   const [successInfo, setSuccessInfo] = useState<{app: AppInfo; operation: 'install' | 'update'} | null>(null);
   const [sortBy, setSortBy] = useState<SortKey>('default');
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
     localStorage.getItem('sidebar-collapsed') === 'true'
   );
@@ -803,175 +803,83 @@ const App: React.FC = () => {
        </aside>
 
       <div className="flex-1 flex flex-col min-h-0 md:min-h-screen">
-        <div className="md:hidden bg-card/70 backdrop-blur-xl border-b border-border/50 p-4 sticky top-0 z-20 flex flex-col gap-3">
+        <div className="md:hidden bg-card/70 backdrop-blur-xl border-b border-border/50 px-4 pt-4 pb-3 sticky top-0 z-20 flex flex-col gap-3">
             <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                    <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-                        <SheetTrigger asChild>
-                            <Button variant="ghost" size="icon">
-                                <Menu className="h-5 w-5" />
-                            </Button>
-                        </SheetTrigger>
-                        <SheetContent side="left" className="w-64 p-0 flex flex-col h-full">
-                             <div className="p-6 border-b border-border shrink-0">
-                                <h1 className="text-xl font-semibold tracking-tight">fnOS Apps</h1>
-                                <p className="text-sm text-muted-foreground mt-1.5">
-                                   上次检查: {lastCheck ? new Date(lastCheck).toLocaleString() : '从未'}
-                                </p>
-                             </div>
-                             <div className="flex-1 overflow-y-auto min-h-0">
-                              <nav className="p-4 space-y-1">
-                                 <Button
-                                   variant={activeFilter === 'recommended' ? 'default' : 'ghost'}
-                                   className="w-full justify-start h-10 px-3 shadow-none rounded-lg font-medium"
-                                   onClick={() => { setActiveFilter('recommended'); setActiveCategory(null); setMobileMenuOpen(false); }}
-                                 >
-                                    <Compass className="mr-3 h-4 w-4 shrink-0" />
-                                    <span className="flex-1 text-left">发现</span>
-                                    <span className="ml-auto text-xs opacity-80 tabular-nums">{counts.recommended}</span>
-                                 </Button>
-                                 <Button
-                                   variant={activeFilter === 'all' ? 'default' : 'ghost'}
-                                   className="w-full justify-start h-10 px-3 shadow-none rounded-lg font-medium"
-                                   onClick={() => { setActiveFilter('all'); setMobileMenuOpen(false); }}
-                                 >
-                                    <LayoutGrid className="mr-3 h-4 w-4 shrink-0" />
-                                    <span className="flex-1 text-left">全部</span>
-                                    <span className={cn("ml-auto text-xs tabular-nums", activeFilter === 'all' ? "text-white/80" : "text-muted-foreground")}>{counts.all}</span>
-                                 </Button>
-                                 <Button
-                                   variant={activeFilter === 'installed' ? 'default' : 'ghost'}
-                                   className="w-full justify-start h-10 px-3 shadow-none rounded-lg font-medium"
-                                   onClick={() => { setActiveFilter('installed'); setMobileMenuOpen(false); }}
-                                 >
-                                    <CheckCircle2 className="mr-3 h-4 w-4 shrink-0" />
-                                    <span className="flex-1 text-left">已安装</span>
-                                    <span className="ml-auto text-xs text-muted-foreground tabular-nums">{counts.installed}</span>
-                                 </Button>
-                                 <Button
-                                   variant={activeFilter === 'update_available' ? 'default' : 'ghost'}
-                                   className="w-full justify-start h-10 px-3 shadow-none rounded-lg font-medium"
-                                   onClick={() => { setActiveFilter('update_available'); setMobileMenuOpen(false); }}
-                                 >
-                                    <RefreshCw className="mr-3 h-4 w-4 shrink-0" />
-                                    <span className="flex-1 text-left">有更新</span>
-                                    {counts.update_available > 0 ? (
-                                      <Badge
-                                        variant={activeFilter === 'update_available' ? 'secondary' : 'destructive'}
-                                        className={cn("ml-auto shrink-0", activeFilter === 'update_available' && "bg-white/25 text-white border-0")}
-                                      >
-                                        {counts.update_available}
-                                      </Badge>
-                                    ) : (
-                                      <span className="ml-auto text-xs text-muted-foreground tabular-nums">0</span>
-                                    )}
-                                 </Button>
-                              </nav>
-                              {activeFilter !== 'recommended' && (
-                                <div className="px-4 pt-3 border-t border-border pb-4">
-                                  <p className="text-xs font-medium text-muted-foreground mb-2 px-3">分类</p>
-                                  <div className="space-y-1">
-                                    <Button
-                                      variant={activeCategory === null ? 'secondary' : 'ghost'}
-                                      className="w-full justify-start h-10 px-3 shadow-none"
-                                      onClick={() => { setActiveCategory(null); setMobileMenuOpen(false); }}
-                                    >
-                                      <LayoutList className="mr-3 h-4 w-4 shrink-0" />
-                                      <span className="flex-1 text-left">全部</span>
-                                    </Button>
-                                    {CATEGORIES.map(cat => {
-                                      const Icon = cat.icon;
-                                      const isActive = activeCategory === cat.key;
-                                      const count = categoryCounts[cat.key];
-                                      return (
-                                        <Button
-                                          key={cat.key}
-                                          variant={isActive ? 'secondary' : 'ghost'}
-                                          className="w-full justify-start h-10 px-3 shadow-none"
-                                          onClick={() => { setActiveCategory(cat.key); setMobileMenuOpen(false); }}
-                                        >
-                                          <Icon className="mr-3 h-4 w-4 shrink-0" />
-                                          <span className="flex-1 text-left">{cat.label}</span>
-                                          <span className="ml-auto text-xs text-muted-foreground tabular-nums">{count}</span>
-                                        </Button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              )}
-                             </div>
-                              {/* Safe-area bottom keeps 设置 above the Android gesture/nav bar (issue #7) */}
-                              <div className="p-4 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-border space-y-1 shrink-0">
-                                 <Button
-                                   variant="ghost"
-                                   className="w-full justify-start h-10 px-3 shadow-none text-muted-foreground hover:text-foreground"
-                                   onClick={() => window.open('https://github.com/conversun/fnos-apps/issues/new?template=bug-report.yml', '_blank')}
-                                 >
-                                    <MessageCircle className="mr-3 h-4 w-4 shrink-0" />
-                                    <span className="flex-1 text-left">问题反馈</span>
-                                 </Button>
-                                 <Button
-                                   variant="ghost"
-                                   className="w-full justify-start h-10 px-3 shadow-none text-muted-foreground hover:text-foreground"
-                                   onClick={() => { setSettingsVisible(true); setMobileMenuOpen(false); }}
-                                 >
-                                    <div className="relative shrink-0 mr-3">
-                                      <Settings className="h-4 w-4" />
-                                      {storeHasUpdate && (
-                                        <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-destructive" />
-                                      )}
-                                    </div>
-                                    <span className="flex-1 text-left">设置</span>
-                                 </Button>
-                              </div>
-                        </SheetContent>
-                    </Sheet>
-                    <h1 className="text-xl font-bold">fnOS Apps</h1>
+                <h1 className="text-xl font-bold tracking-tight">fnOS Apps</h1>
+                <div className="flex items-center gap-0.5">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9"
+                      onClick={() => setSettingsVisible(true)}
+                      aria-label="设置"
+                      title="设置"
+                    >
+                      <div className="relative">
+                        <Settings className="h-[18px] w-[18px]" />
+                        {storeHasUpdate && (
+                          <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-destructive" />
+                        )}
+                      </div>
+                    </Button>
+                    <ThemeToggle />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9"
+                      onClick={handleCheck}
+                      disabled={checking}
+                      aria-label="检查更新"
+                      title="检查更新"
+                    >
+                      <RefreshCw className={cn("h-[18px] w-[18px]", checking && "animate-spin")} />
+                    </Button>
                 </div>
-                <ThemeToggle />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleCheck}
-                  disabled={checking}
-                  aria-label="检查更新"
-                >
-                  <RefreshCw className={cn("h-5 w-5", checking && "animate-spin")} />
-                </Button>
             </div>
             {activeFilter !== 'recommended' && (
-              <>
-                <div className="relative">
-                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                  <Input
-                    type="text"
-                    placeholder="搜索应用..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-9 pr-8 h-9 shadow-none rounded-full border-0 bg-muted/60 focus-visible:ring-primary/40"
-                  />
-                  {searchQuery && (
-                    <button
-                      onClick={() => setSearchQuery('')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
+              <div className="relative">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                <Input
+                  type="text"
+                  placeholder="搜索应用..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-8 h-9 shadow-none rounded-full border-0 bg-muted/60 focus-visible:ring-primary/40"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            )}
+            {activeFilter !== 'recommended' && (
+              <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1">
+                <button
+                  onClick={() => setActiveCategory(null)}
+                  className={cn(
+                    "shrink-0 h-8 px-3.5 rounded-full text-[13px] font-medium whitespace-nowrap",
+                    activeCategory === null ? "bg-primary text-primary-foreground" : "bg-muted/60 text-foreground"
                   )}
-                </div>
-                <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
-                  <SelectTrigger className="w-full h-9 shadow-none rounded-full border-0 bg-muted/60">
-                    <ArrowUpDown className="h-3.5 w-3.5 mr-1.5" />
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">默认</SelectItem>
-                    <SelectItem value="downloads">下载量</SelectItem>
-                    <SelectItem value="name">名称</SelectItem>
-                    <SelectItem value="updated">最近更新</SelectItem>
-                  </SelectContent>
-                </Select>
-              </>
+                >
+                  全部
+                </button>
+                {CATEGORIES.map(cat => (
+                  <button
+                    key={cat.key}
+                    onClick={() => setActiveCategory(cat.key)}
+                    className={cn(
+                      "shrink-0 h-8 px-3.5 rounded-full text-[13px] font-medium whitespace-nowrap",
+                      activeCategory === cat.key ? "bg-primary text-primary-foreground" : "bg-muted/60 text-foreground"
+                    )}
+                  >
+                    {cat.label}
+                  </button>
+                ))}
+              </div>
             )}
         </div>
 
@@ -1041,7 +949,7 @@ const App: React.FC = () => {
            </div>
         </header>
 
-        <main className="flex-grow p-4 md:p-8 overflow-y-auto">
+        <main className="flex-grow p-4 pb-24 md:p-8 md:pb-8 overflow-y-auto">
           {activeFilter === 'recommended' ? (
             <div className="space-y-10">
               {apps.length > 0 && (
@@ -1065,19 +973,37 @@ const App: React.FC = () => {
               )}
             </div>
           ) : loadStatus === 'loaded' ? (
-            <AppList
-               apps={filteredApps}
-               loading={false}
-               onInstall={handleInstall}
-               onUpdate={handleUpdate}
-               onUninstall={handleUninstall}
-               onDetail={setDetailApp}
-               onCancelOp={handleCancelOp}
-               upgradeAllowed={upgradeAllowed}
-               filterType={activeFilter}
-               appOperations={appOperations}
-               searchQuery={searchQuery}
-             />
+            <>
+              <div className="hidden md:block">
+                <AppList
+                   apps={filteredApps}
+                   loading={false}
+                   onInstall={handleInstall}
+                   onUpdate={handleUpdate}
+                   onUninstall={handleUninstall}
+                   onDetail={setDetailApp}
+                   onCancelOp={handleCancelOp}
+                   upgradeAllowed={upgradeAllowed}
+                   filterType={activeFilter}
+                   appOperations={appOperations}
+                   searchQuery={searchQuery}
+                />
+              </div>
+              <div className="md:hidden">
+                <AppRowList
+                  apps={filteredApps}
+                  onInstall={handleInstall}
+                  onUpdate={handleUpdate}
+                  onUninstall={handleUninstall}
+                  onDetail={setDetailApp}
+                  onCancelOp={handleCancelOp}
+                  appOperations={appOperations}
+                  searchQuery={searchQuery}
+                  filterType={activeFilter}
+                  upgradeAllowed={upgradeAllowed}
+                />
+              </div>
+            </>
           ) : loadStatus === 'loading' ? (
             <div className="flex flex-col items-center justify-center h-64">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mb-4" />
@@ -1127,6 +1053,13 @@ const App: React.FC = () => {
           )}
         </main>
       </div>
+
+      {/* 移动端底部 dock（iOS App Store 标签栏） */}
+      <MobileDock
+        active={activeFilter}
+        onSelect={(key) => { setActiveFilter(key); setActiveCategory(null); }}
+        updateCount={counts.update_available}
+      />
 
       {selfUpdateActive && selfUpdateState && (
         <ProgressOverlay
