@@ -1077,6 +1077,7 @@ const App: React.FC = () => {
             visible={settingsVisible}
             onClose={() => setSettingsVisible(false)}
             onStoreUpdate={handleStoreUpdate}
+            onCatalogChanged={() => setTimeout(() => loadApps(), 2500)}
         />
       )}
 

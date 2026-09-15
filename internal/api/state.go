@@ -29,6 +29,22 @@ func (s *Server) refreshRegistry(ctx context.Context) error {
 
 	remoteApps, fetchErr := s.source.FetchApps(ctx)
 
+	// FnDepot 外部源：并发抓取，与内置目录合并（内置 appname 优先）。
+	customApps, customStatus := s.fetchCustomSources(ctx)
+	if customApps != nil {
+		seen := make(map[string]bool, len(remoteApps))
+		combined := append([]source.RemoteApp{}, remoteApps...)
+		for _, a := range combined {
+			seen[a.AppName] = true
+		}
+		for _, a := range customApps {
+			if !seen[a.AppName] {
+				combined = append(combined, a)
+			}
+		}
+		remoteApps = combined
+	}
+
 	var installedTags map[string]string
 	if s.cacheStore != nil {
 		installedTags = s.cacheStore.InstalledTags()
@@ -41,6 +57,9 @@ func (s *Server) refreshRegistry(ctx context.Context) error {
 		s.registry.Merge(localApps, remoteApps, installedTags)
 	}
 	s.lastCheck = now
+	if len(customStatus) > 0 {
+		s.sourceStatus = customStatus
+	}
 	s.mu.Unlock()
 
 	if s.cacheStore != nil {
@@ -159,4 +178,101 @@ func (s *Server) refreshRegistryDebounced(ctx context.Context) {
 
 		_ = s.refreshRegistry(context.Background())
 	})
+}
+
+// rebuildCustomSources 从配置重建外部源列表（惰性构造，不立即抓取）。
+// 启动与每次源配置变更后调用。
+func (s *Server) rebuildCustomSources() {
+	if s.configMgr == nil {
+		return
+	}
+	cfg := s.configMgr.Get()
+	srcs := make([]*source.FNDepotSource, 0, len(cfg.Sources))
+	for _, entry := range cfg.Sources {
+		cs, err := source.NewFNDepotSourceLazy(entry.URL)
+		if err != nil {
+			continue // 无效地址在源列表 API 中按错误展示
+		}
+		cs.OverrideName(entry.Name)
+		srcs = append(srcs, cs)
+	}
+	s.mu.Lock()
+	s.customSources = srcs
+	s.mu.Unlock()
+}
+
+// fetchCustomSources 并发抓取所有外部源，返回合并后的 RemoteApp 列表
+// （仅当前架构可用的应用）与每源状态。单源失败不影响其他源与内置目录。
+func (s *Server) fetchCustomSources(ctx context.Context) ([]source.RemoteApp, map[string]sourceStatusInfo) {
+	s.mu.RLock()
+	srcs := s.customSources
+	s.mu.RUnlock()
+	if len(srcs) == 0 {
+		return nil, nil
+	}
+
+	type customResult struct {
+		id   string
+		apps []source.RemoteApp
+		err  error
+	}
+	ch := make(chan customResult, len(srcs))
+	for _, cs := range srcs {
+		go func(cs *source.FNDepotSource) {
+			cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			apps, err := cs.FetchApps(cctx)
+			ch <- customResult{cs.ID(), apps, err}
+		}(cs)
+	}
+
+	merged := []source.RemoteApp{}
+	status := make(map[string]sourceStatusInfo, len(srcs))
+	now := time.Now()
+	for range srcs {
+		r := <-ch
+		if r.err != nil {
+			status[r.id] = sourceStatusInfo{Error: r.err.Error(), LastFetched: now}
+			continue
+		}
+		status[r.id] = sourceStatusInfo{AppCount: len(r.apps), LastFetched: now}
+		merged = append(merged, r.apps...)
+	}
+	return merged, status
+}
+
+// ListSources 返回外部源管理视图（配置 + 最近抓取状态）。
+func (s *Server) ListSources() []SourceEntry {
+	cfg := s.configMgr.Get()
+	s.mu.RLock()
+	srcs := s.customSources
+	status := s.sourceStatus
+	s.mu.RUnlock()
+
+	byID := make(map[string]*source.FNDepotSource, len(srcs))
+	for _, cs := range srcs {
+		byID[cs.ID()] = cs
+	}
+
+	entries := make([]SourceEntry, 0, len(cfg.Sources))
+	for _, entry := range cfg.Sources {
+		e := SourceEntry{
+			ID:   entry.ID,
+			Name: entry.Name,
+			URL:  entry.URL,
+		}
+		if cs, ok := byID[entry.ID]; ok {
+			meta := cs.Meta()
+			e.Name = meta.Name
+			e.Author = meta.Author
+			e.Homepage = meta.Homepage
+		}
+		if st, ok := status[entry.ID]; ok {
+			e.AppCount = st.AppCount
+			e.Error = st.Error
+			e.LastFetched = st.LastFetched
+		}
+		entries = append(entries, e)
+	}
+	return entries
 }

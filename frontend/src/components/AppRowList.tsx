@@ -5,7 +5,7 @@ import { cn, formatCount, formatSpeed, formatProgress } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import {
-  Download, Package, Circle, Container, X, BellOff, Trash2,
+  Download, Package, Circle, Container, X, BellOff, Trash2, Globe,
 } from 'lucide-react';
 import { CheckCircle2, RefreshCw as UpdateIcon, Search } from 'lucide-react';
 
@@ -130,6 +130,14 @@ const AppRowList: React.FC<AppRowListProps> = ({
                     <span className="text-muted-foreground/30">·</span>
                     <span className="inline-flex items-center gap-0.5">
                       <Download className="h-3 w-3" />{formatCount(app.download_count)}
+                    </span>
+                  </>
+                )}
+                {app.source && (
+                  <>
+                    <span className="text-muted-foreground/30">·</span>
+                    <span className="inline-flex items-center gap-0.5 text-primary/80" title={`来源：${app.source}`}>
+                      <Globe className="h-3 w-3" />{app.source}
                     </span>
                   </>
                 )}

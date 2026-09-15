@@ -30,6 +30,8 @@ type appResponse struct {
 	AppType             string `json:"app_type,omitempty"`
 	Category            string `json:"category,omitempty"`
 	PostInstallNote     string `json:"post_install_note,omitempty"`
+	// Source 标记应用来自哪个目录源（内置 fnos-apps 或用户添加的 FnDepot 外部源）。
+	Source              string `json:"source,omitempty"`
 }
 
 type appsListResponse struct {

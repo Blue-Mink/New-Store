@@ -30,6 +30,8 @@ export interface AppInfo {
   app_type?: string;
   category?: string;
   post_install_note?: string;
+  /** 应用来自哪个目录源（内置目录无此字段；外部 FnDepot 源为其显示名）。 */
+  source?: string;
 }
 
 /**
@@ -310,6 +312,64 @@ export const checkMirrors = async (type?: 'github' | 'docker'): Promise<MirrorCh
   return response.json();
 };
 
+
+// ── 外部应用源（FnDepot V1/V2 协议）──────────────────────────────────────────
+
+export interface SourceEntry {
+  id: string;
+  name: string;
+  url: string;
+  author?: string;
+  homepage?: string;
+  app_count: number;
+  error?: string;
+  last_fetched?: string;
+}
+
+export interface SourcesResponse {
+  sources: SourceEntry[];
+}
+
+const extractError = async (response: Response, fallback: string): Promise<string> => {
+  try {
+    const body = await response.json();
+    if (body && body.error) return body.error;
+  } catch {
+    // 非 JSON 错误体，用 fallback
+  }
+  return fallback;
+};
+
+export const fetchSources = async (): Promise<SourcesResponse> => {
+  const response = await fetch(apiUrl('/api/sources'));
+  if (!response.ok) {
+    throw new Error(await extractError(response, `获取应用源列表失败: ${response.statusText}`));
+  }
+  return response.json();
+};
+
+/** 添加外部应用源。后端会立即抓取+解析验证，可能耗时数秒。 */
+export const addSource = async (url: string, name?: string): Promise<SourceEntry> => {
+  const response = await fetch(apiUrl('/api/sources'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, name: name || undefined }),
+  });
+  if (!response.ok) {
+    throw new Error(await extractError(response, `添加应用源失败: ${response.statusText}`));
+  }
+  const body = await response.json();
+  return body.source as SourceEntry;
+};
+
+export const removeSource = async (id: string): Promise<void> => {
+  const response = await fetch(apiUrl(`/api/sources/${encodeURIComponent(id)}`), {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw new Error(await extractError(response, `删除应用源失败: ${response.statusText}`));
+  }
+};
 
 export interface StatusResponse {
   version?: string;

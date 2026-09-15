@@ -22,11 +22,14 @@ import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Loader2, RefreshCw, Zap, MessageCircle } from 'lucide-react'
 import { toast } from 'sonner'
+import SourceManager from './SourceManager'
 
 interface SettingsDialogProps {
   visible: boolean;
   onClose: () => void;
   onStoreUpdate?: () => void;
+  /** 外部应用源变化后刷新应用目录 */
+  onCatalogChanged?: () => void;
 }
 
 function formatBytes(bytes: number): string {
@@ -54,6 +57,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   visible,
   onClose,
   onStoreUpdate,
+  onCatalogChanged,
 }) => {
   const [interval, setInterval] = useState<number>(24);
   const [mirror, setMirror] = useState<string>('gh-proxy');
@@ -396,6 +400,10 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 {dockerEnabled ? 'Docker 类应用拉取镜像时使用的加速源' : '直接从 Docker Hub 拉取，不使用加速'}
               </p>
             </div>
+
+            <Separator />
+
+            <SourceManager onCatalogChanged={onCatalogChanged} />
 
             <Separator />
 

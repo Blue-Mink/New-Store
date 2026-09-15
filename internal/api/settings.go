@@ -121,6 +121,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		CustomDockerMirror: req.CustomDockerMirror,
 		InstallVolume:      req.InstallVolume,
 		IgnoredApps:        existing.IgnoredApps,
+		Sources:            existing.Sources, // 外部应用源由 /api/sources 管理，这里保持不动
 	}
 
 	if err := s.configMgr.SaveConfig(cfg); err != nil {

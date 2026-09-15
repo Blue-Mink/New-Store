@@ -34,9 +34,20 @@ type Server struct {
 	lastCheck         time.Time
 	statusByApp       map[string]string
 	recommendedApps   []source.RecommendedApp
+	// customSources 是用户添加的 FnDepot 外部应用源；sourceStatus 记录
+	// 每个源最近一次抓取的应用数与错误（按源 ID 索引）。
+	customSources []*source.FNDepotSource
+	sourceStatus  map[string]sourceStatusInfo
 
 	mu               sync.RWMutex
 	refreshDebouncer *refreshDebouncer
+}
+
+// sourceStatusInfo 是单个外部源最近一次抓取的结果摘要。
+type sourceStatusInfo struct {
+	AppCount    int       `json:"app_count"`
+	Error       string    `json:"error,omitempty"`
+	LastFetched time.Time `json:"last_fetched"`
 }
 
 type Config struct {
@@ -80,8 +91,10 @@ func NewServer(cfg Config) *Server {
 		staticFS:         cfg.StaticFS,
 		statusByApp:      make(map[string]string),
 		refreshDebouncer: &refreshDebouncer{},
+		sourceStatus:     make(map[string]sourceStatusInfo),
 	}
 	s.routes()
+	s.rebuildCustomSources()
 	_ = s.refreshRecommended(context.Background())
 	_ = s.refreshRegistry(context.Background())
 	return s
@@ -104,6 +117,9 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("GET /api/status", s.handleStatus)
 	s.Mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	s.Mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
+	s.Mux.HandleFunc("GET /api/sources", s.handleListSources)
+	s.Mux.HandleFunc("POST /api/sources", s.handleAddSource)
+	s.Mux.HandleFunc("DELETE /api/sources/{id}", s.handleRemoveSource)
 	s.Mux.HandleFunc("GET /api/store-update", s.handleGetStoreUpdate)
 	s.Mux.HandleFunc("POST /api/store-update", s.handlePostStoreUpdate)
 	s.Mux.HandleFunc("POST /api/mirrors/check", s.handleCheckMirrors)

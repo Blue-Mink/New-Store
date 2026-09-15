@@ -169,6 +169,15 @@ type Config struct {
 	CustomDockerMirror string   `json:"custom_docker_mirror,omitempty"`
 	InstallVolume      int      `json:"install_volume"`
 	IgnoredApps        []string `json:"ignored_apps,omitempty"`
+	// Sources 是用户添加的 FnDepot 外部应用源（V1/V2 协议）。
+	Sources []CustomSource `json:"sources,omitempty"`
+}
+
+// CustomSource 描述一个用户添加的外部应用源。
+type CustomSource struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 // IsAppIgnored returns true if the given app is in the ignored list.

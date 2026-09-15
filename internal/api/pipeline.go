@@ -61,6 +61,12 @@ func (p *installPipeline) extractFpk(fpkPath string) (string, error) {
 	return dir, nil
 }
 
+// isGitHubDownloadURL 判断下载地址是否指向 GitHub（内置目录的 Release 地址）。
+// 只有 GitHub 地址才适用 GitHub 镜像前缀；FnDepot 外部源的直链地址必须直连。
+func isGitHubDownloadURL(rawURL string) bool {
+	return strings.Contains(rawURL, "github.com")
+}
+
 func (p *installPipeline) downloadFpk(ctx context.Context, stream *sseStream, app core.AppInfo) (string, error) {
 	if p.downloads == nil {
 		return "", errors.New("下载器未配置")
@@ -92,12 +98,17 @@ func (p *installPipeline) downloadFpk(ctx context.Context, stream *sseStream, ap
 
 	prefixes := config.GitHubFallbackPrefixes(cfg.Mirror, cfg)
 	downloadURLs := make([]string, 0, len(prefixes))
-	for _, prefix := range prefixes {
-		if prefix != "" {
-			downloadURLs = append(downloadURLs, prefix+app.DownloadURL)
-		} else {
-			downloadURLs = append(downloadURLs, app.DownloadURL)
+	if isGitHubDownloadURL(app.DownloadURL) {
+		for _, prefix := range prefixes {
+			if prefix != "" {
+				downloadURLs = append(downloadURLs, prefix+app.DownloadURL)
+			} else {
+				downloadURLs = append(downloadURLs, app.DownloadURL)
+			}
 		}
+	} else {
+		// 非 GitHub 地址（FnDepot 外部源直链）：GitHub 镜像前缀不适用，直连。
+		downloadURLs = append(downloadURLs, app.DownloadURL)
 	}
 
 	fpkPath, err := p.downloads.Download(ctx, core.DownloadRequest{
@@ -993,8 +1004,12 @@ func (p *installPipeline) downloadFpkQuiet(ctx context.Context, app core.AppInfo
 	}
 	prefixes := config.GitHubFallbackPrefixes(cfg.Mirror, cfg)
 	urls := make([]string, 0, len(prefixes))
-	for _, prefix := range prefixes {
-		urls = append(urls, prefix+app.DownloadURL)
+	if isGitHubDownloadURL(app.DownloadURL) {
+		for _, prefix := range prefixes {
+			urls = append(urls, prefix+app.DownloadURL)
+		}
+	} else {
+		urls = append(urls, app.DownloadURL)
 	}
 
 	return p.downloads.Download(ctx, core.DownloadRequest{
