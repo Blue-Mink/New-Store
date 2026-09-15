@@ -16,6 +16,7 @@ import {
   X,
   BellOff,
   Trash2,
+  Tag,
 } from 'lucide-react';
 
 interface AppCardProps {
@@ -28,9 +29,13 @@ interface AppCardProps {
   onUninstall?: (app: AppInfo) => void;
   onDetail?: (app: AppInfo) => void;
   onCancelOp?: (app: AppInfo) => void;
+  /** 点击源名徽章 → 只看该源的应用 */
+  onSourceFilter?: (source: string) => void;
+  /** 点击开发者 → 只看该作者的应用 */
+  onAuthorFilter?: (author: string) => void;
 }
 
-const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, upgradeAllowed = true }) => {
+const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, upgradeAllowed = true, onSourceFilter, onAuthorFilter }) => {
   const isInstalled = app.installed;
   const canUpdate = isInstalled && app.has_update;
 
@@ -114,10 +119,33 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
               )}
             </div>
 
-            {/* App Store 风格的「开发者」行：用应用 id 充当开发者 */}
-            <p className="text-xs text-muted-foreground/80 truncate" title={app.appname}>
-              {app.appname}
-            </p>
+            {/* 来源徽章（外部源）+ 开发者行（App Store 风格，可点击过滤） */}
+            <div className="flex items-center gap-1.5 min-w-0">
+              {/* 仅外部 FnDepot 源应用标注来源徽章；内置目录（fnos-apps）不显示 */}
+              {app.source && app.source !== 'fnos-apps' && onSourceFilter && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onSourceFilter(app.source!); }}
+                  className="shrink-0 inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-1.5 h-[18px] text-[10px] font-medium text-primary hover:bg-primary/20 transition-colors"
+                  title={`只看「${app.source}」源的应用`}
+                >
+                  <Tag className="h-2.5 w-2.5" />
+                  <span className="max-w-[90px] truncate">{app.source}</span>
+                </button>
+              )}
+              {app.maintainer && onAuthorFilter ? (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onAuthorFilter(app.maintainer!); }}
+                  className="text-xs text-muted-foreground/80 truncate hover:text-primary transition-colors"
+                  title={`只看「${app.maintainer}」的应用`}
+                >
+                  {app.maintainer}
+                </button>
+              ) : (
+                <span className="text-xs text-muted-foreground/80 truncate" title={app.appname}>
+                  {app.appname}
+                </span>
+              )}
+            </div>
 
             <div className="flex items-center flex-wrap gap-x-1.5 text-xs text-muted-foreground">
               <span>v{isInstalled ? installedVersionLabel(app) : app.latest_version}</span>

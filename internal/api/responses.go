@@ -32,6 +32,17 @@ type appResponse struct {
 	PostInstallNote     string `json:"post_install_note,omitempty"`
 	// Source 标记应用来自哪个目录源（内置 fnos-apps 或用户添加的 FnDepot 外部源）。
 	Source              string `json:"source,omitempty"`
+
+	// 外部源详情页扩展元数据（内置目录应用通常无这些字段）。
+	Maintainer     string   `json:"maintainer,omitempty"`
+	MaintainerURL  string   `json:"maintainer_url,omitempty"`
+	Distributor    string   `json:"distributor,omitempty"`
+	DistributorURL string   `json:"distributor_url,omitempty"`
+	Changelog      string   `json:"changelog,omitempty"`
+	SizeBytes      int64    `json:"size_bytes,omitempty"`
+	SHA256         string   `json:"sha256,omitempty"`
+	PreviewCount   int      `json:"preview_count,omitempty"`
+	HasReadme      bool     `json:"has_readme,omitempty"`
 }
 
 type appsListResponse struct {

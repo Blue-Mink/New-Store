@@ -32,6 +32,16 @@ export interface AppInfo {
   post_install_note?: string;
   /** 应用来自哪个目录源（内置目录无此字段；外部 FnDepot 源为其显示名）。 */
   source?: string;
+  // 外部源详情页扩展元数据（内置目录应用无这些字段）。
+  maintainer?: string;
+  maintainer_url?: string;
+  distributor?: string;
+  distributor_url?: string;
+  changelog?: string;
+  size_bytes?: number;
+  sha256?: string;
+  preview_count?: number;
+  has_readme?: boolean;
 }
 
 /**
@@ -362,6 +372,28 @@ export const addSource = async (url: string, name?: string): Promise<SourceEntry
   return body.source as SourceEntry;
 };
 
+export interface BatchSourceResult {
+  url: string;
+  ok: boolean;
+  name?: string;
+  error?: string;
+}
+
+/** 批量添加外部应用源（多行输入一次提交）。单条失败不影响其他条。 */
+export const addSourcesBatch = async (
+  items: { url: string; name?: string }[],
+): Promise<{ added: number; results: BatchSourceResult[] }> => {
+  const response = await fetch(apiUrl('/api/sources/batch'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+  });
+  if (!response.ok) {
+    throw new Error(await extractError(response, `批量添加应用源失败: ${response.statusText}`));
+  }
+  return response.json();
+};
+
 export const removeSource = async (id: string): Promise<void> => {
   const response = await fetch(apiUrl(`/api/sources/${encodeURIComponent(id)}`), {
     method: 'DELETE',
@@ -370,6 +402,10 @@ export const removeSource = async (id: string): Promise<void> => {
     throw new Error(await extractError(response, `删除应用源失败: ${response.statusText}`));
   }
 };
+
+/** 应用详情页资源（README / 预览图）的代理地址，走后端镜像链。 */
+export const assetUrl = (appname: string, type: 'readme' | 'preview', index?: number): string =>
+  apiUrl(`/api/apps/${encodeURIComponent(appname)}/asset?type=${type}${index != null ? `&index=${index}` : ''}`);
 
 export interface StatusResponse {
   version?: string;

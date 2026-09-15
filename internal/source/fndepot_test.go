@@ -52,6 +52,46 @@ const v1Sample = `{
   }
 }`
 
+// v1FlatSample 是真实 V1 平铺格式（Blue-Mink/FnDepot 同款）：
+// 无 schema_version、无 releases，单 version + download_url，
+// labels 中文字符串、isdocker 字符串、service_port 数字。
+const v1FlatSample = `{
+  "global-radio": {
+    "display_name": "全球电台",
+    "version": "1.3.0",
+    "platform": "x86",
+    "desc": "在线电台应用",
+    "labels": "娱乐",
+    "author": "molixia",
+    "author_url": "https://github.com/moli-xia",
+    "isdocker": "true",
+    "install_type": "用户空间",
+    "size": "0.10",
+    "download_url": "https://github.com/B/R/releases/download/v1.3.0/gr.fpk",
+    "changelog": "1.3.0: 网关双入口",
+    "icon_url": "./global-radio/ICON.PNG",
+    "readme_url": "./global-radio/README.md",
+    "homepage": "https://github.com/moli-xia/global-radio",
+    "service_port": 32678
+  },
+  "fn-knock": {
+    "display_name": "敲门knock",
+    "version": "2.4.14",
+    "platform": "all",
+    "labels": "安全，工具",
+    "isdocker": "false",
+    "download_url": "https://github.com/B/R/releases/download/v2.4.14/fnk.fpk",
+    "icon_url": "./fn-knock/ICON.PNG",
+    "service_port": 7999
+  },
+  "arm-only.app": {
+    "display_name": "ArmOnly",
+    "version": "1.0.0",
+    "platform": "arm",
+    "download_url": "https://cdn.example.com/arm.fpk"
+  }
+}`
+
 func decodeBody(t *testing.T, body string) map[string]fndepotAppEntry {
 	t.Helper()
 	m, _ := decodeFndepotApps([]byte(body)) // 第二返回值=是否V2，成功与否看长度
@@ -391,4 +431,85 @@ func names(apps []RemoteApp) []string {
 		out = append(out, a.AppName)
 	}
 	return out
+}
+
+func TestDecodeFndepotApps_V1Flat(t *testing.T) {
+	m := decodeBody(t, v1FlatSample)
+	if len(m) != 3 {
+		t.Fatalf("V1 平铺应解析 3 个应用，实际 %d", len(m))
+	}
+	e := m["global-radio"]
+	if e.Version != "1.3.0" || e.DownloadURL == "" {
+		t.Errorf("V1 平铺字段未解析: version=%q download=%q", e.Version, e.DownloadURL)
+	}
+	if e.Labels != "娱乐" || e.IsDockerV1 != "true" {
+		t.Errorf("labels/isdocker 未解析: %q / %q", e.Labels, e.IsDockerV1)
+	}
+	if e.ServicePort != "32678" {
+		t.Errorf("service_port(数字) 应可入 string 字段: %q", e.ServicePort)
+	}
+}
+
+func TestTranslateFndepotApp_V1Flat(t *testing.T) {
+	m := decodeBody(t, v1FlatSample)
+	base := "https://raw.githubusercontent.com/B/R/HEAD/fnpack.json"
+
+	// x86 机器：global-radio（x86 声明）应通过
+	ra, ok := translateFndepotApp("global-radio", m["global-radio"], base, "B")
+	if !ok {
+		t.Fatal("V1 平铺 x86 应用应可翻译（这是 Blue-Mink 不同步的 bug 场景）")
+	}
+	if ra.Version != "1.3.0" {
+		t.Errorf("version = %s", ra.Version)
+	}
+	if ra.FpkURL != "https://github.com/B/R/releases/download/v1.3.0/gr.fpk" {
+		t.Errorf("FpkURL = %s", ra.FpkURL)
+	}
+	if ra.IconURL != "https://raw.githubusercontent.com/B/R/HEAD/global-radio/ICON.PNG" {
+		t.Errorf("相对 icon 解析错误: %s", ra.IconURL)
+	}
+	if ra.ReadmeURL != "https://raw.githubusercontent.com/B/R/HEAD/global-radio/README.md" {
+		t.Errorf("readme 解析错误: %s", ra.ReadmeURL)
+	}
+	if ra.AppType != "docker" {
+		t.Errorf("isdocker=true 应映射 docker，实际 %q", ra.AppType)
+	}
+	if ra.ServicePort != 32678 {
+		t.Errorf("port = %d", ra.ServicePort)
+	}
+	if ra.Category != "media" {
+		t.Errorf("labels=娱乐 应映射 media，实际 %q", ra.Category)
+	}
+	if ra.Changelog != "1.3.0: 网关双入口" {
+		t.Errorf("changelog = %q", ra.Changelog)
+	}
+
+	// platform=all 的 V1 应用也应通过
+	ra2, ok2 := translateFndepotApp("fn-knock", m["fn-knock"], base, "B")
+	if !ok2 {
+		t.Fatal("V1 平铺 all 应用应可翻译")
+	}
+	if ra2.AppType != "" {
+		t.Errorf("isdocker=false 不应是 docker: %q", ra2.AppType)
+	}
+
+	// platform=arm 的 V1 应用在 x86 机器上应被跳过
+	if _, ok3 := translateFndepotApp("arm-only.app", m["arm-only.app"], base, "B"); ok3 {
+		t.Error("arm-only 应用在 x86 上应被平台过滤跳过")
+	}
+}
+
+func TestFndepotGitHubOwner(t *testing.T) {
+	cases := map[string]string{
+		"https://github.com/Blue-Mink/FnDepot":        "Blue-Mink",
+		"https://github.com/Blue-Mink/FnDepot/":       "Blue-Mink",
+		"https://github.com/Blue-Mink/FnDepot?x=1":    "",
+		"https://raw.githubusercontent.com/a/b/c":     "",
+		"https://example.com/x/y/fnpack.json":         "",
+	}
+	for in, want := range cases {
+		if got := fndepotGitHubOwner(in); got != want {
+			t.Errorf("fndepotGitHubOwner(%q) = %q，期望 %q", in, got, want)
+		}
+	}
 }

@@ -70,6 +70,15 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 			Category:            app.Category,
 			PostInstallNote:     app.PostInstallNote,
 			Source:              app.Source,
+			Maintainer:          app.Maintainer,
+			MaintainerURL:       app.MaintainerURL,
+			Distributor:         app.Distributor,
+			DistributorURL:      app.DistributorURL,
+			Changelog:           app.Changelog,
+			SizeBytes:           app.SizeBytes,
+			SHA256:              app.SHA256,
+			PreviewCount:        len(app.PreviewURLs),
+			HasReadme:           app.ReadmeURL != "",
 		})
 	}
 

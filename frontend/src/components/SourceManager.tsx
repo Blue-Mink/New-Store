@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { fetchSources, addSource, removeSource, type SourceEntry } from '../api/client';
+import { fetchSources, addSourcesBatch, removeSource, type SourceEntry } from '../api/client';
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Plus, Trash2, ExternalLink } from 'lucide-react'
+import { Loader2, Plus, Trash2, ExternalLink, Link2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface SourceManagerProps {
@@ -14,8 +13,7 @@ interface SourceManagerProps {
 const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
   const [sources, setSources] = useState<SourceEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [url, setUrl] = useState('');
-  const [name, setName] = useState('');
+  const [input, setInput] = useState('');
   const [adding, setAdding] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
 
@@ -34,22 +32,30 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
     load();
   }, [load]);
 
+  const lines = input.split('\n').map((l) => l.trim()).filter(Boolean);
+
   const handleAdd = async () => {
-    const trimmed = url.trim();
-    if (!trimmed) {
-      toast.error('请输入应用源地址');
+    if (lines.length === 0) {
+      toast.error('请输入应用源地址（每行一个）');
       return;
     }
     setAdding(true);
     try {
-      const src = await addSource(trimmed, name.trim() || undefined);
-      toast.success(`已添加应用源「${src.name}」`);
-      setUrl('');
-      setName('');
+      const res = await addSourcesBatch(lines.map((url) => ({ url })));
+      const ok = res.results.filter((r) => r.ok);
+      const fail = res.results.filter((r) => !r.ok);
+      if (ok.length > 0) {
+        const names = ok.map((r) => `「${r.name}」`).join('、');
+        toast.success(`已添加 ${ok.length} 个应用源：${names}`);
+      }
+      for (const r of fail) {
+        toast.error(`${r.url}：${r.error || '添加失败'}`);
+      }
+      if (ok.length > 0) setInput('');
       await load();
       onCatalogChanged?.();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : '添加应用源失败');
+      toast.error(e instanceof Error ? e.message : '批量添加应用源失败');
     } finally {
       setAdding(false);
     }
@@ -82,7 +88,7 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
         </div>
       ) : sources.length === 0 ? (
         <p className="text-xs leading-relaxed text-muted-foreground">
-          暂无外部应用源。添加后，源中的应用会并入商店目录，来源会在应用上标注。
+          暂无外部应用源。添加后，源中的应用会并入商店目录，来源与作者会在应用上标注。
         </p>
       ) : (
         <div className="space-y-2">
@@ -140,38 +146,41 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
       )}
 
       <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
-        <Input
-          placeholder="源地址：JSON 直链或 GitHub 仓库"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
+        <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+          <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
+          添加应用源
+          {lines.length > 1 && (
+            <Badge variant="secondary" className="h-4 px-1 text-[10px]">
+              {lines.length} 行
+            </Badge>
+          )}
+        </div>
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !adding) handleAdd();
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !adding) {
+              e.preventDefault();
+              handleAdd();
+            }
           }}
-          className="h-8 text-xs"
+          placeholder={'每行一个源地址，回车换行继续输入，例如：\nhttps://github.com/Blue-Mink/FnDepot\nhttps://github.com/SomeAuthor/Apps'}
+          rows={3}
+          className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-xs leading-relaxed placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
-        <div className="flex items-center gap-2">
-          <Input
-            placeholder="显示名（可选）"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !adding) handleAdd();
-            }}
-            className="h-8 flex-1 text-xs"
-          />
-          <Button size="sm" onClick={handleAdd} disabled={adding || !url.trim()} className="h-8 shrink-0">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            FnDepot V1/V2：JSON 直链或 GitHub 仓库。源名自动取仓库作者名。
+          </p>
+          <Button size="sm" onClick={handleAdd} disabled={adding || lines.length === 0} className="h-8 shrink-0">
             {adding ? (
               <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
             ) : (
               <Plus className="mr-1 h-3.5 w-3.5" />
             )}
-            {adding ? '验证中…' : '添加'}
+            {adding ? '验证中…' : `添加${lines.length > 1 ? ` ${lines.length} 个` : ''}`}
           </Button>
         </div>
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
-          支持 FnDepot 外部应用源协议（V1/V2）：JSON 直链（…/fnpack.json）或 GitHub 仓库根地址。
-          添加时即验证可达性与格式。
-        </p>
       </div>
     </div>
   );

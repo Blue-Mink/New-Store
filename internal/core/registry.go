@@ -47,6 +47,17 @@ type AppInfo struct {
 	Status              AppStatus
 	HasRevisionUpdate   bool
 	PostInstallNote     string
+
+	// 外部源详情页扩展元数据（内置目录通常为空）。
+	ReadmeURL      string
+	PreviewURLs    []string
+	Maintainer     string
+	MaintainerURL  string
+	Distributor    string
+	DistributorURL string
+	Changelog      string
+	SizeBytes      int64
+	SHA256         string
 }
 
 type Registry struct {
@@ -91,6 +102,15 @@ func (r *Registry) Merge(local []Manifest, remote []source.RemoteApp, installedT
 			Category:        item.Category,
 			Status:          AppStatusNotInstalled,
 			PostInstallNote: item.PostInstallNote,
+			ReadmeURL:           item.ReadmeURL,
+			PreviewURLs:         item.PreviewURLs,
+			Maintainer:          item.Maintainer,
+			MaintainerURL:       item.MaintainerURL,
+			Distributor:         item.Distributor,
+			DistributorURL:      item.DistributorURL,
+			Changelog:           item.Changelog,
+			SizeBytes:           item.SizeBytes,
+			SHA256:              item.SHA256,
 		}
 
 		if installed {

@@ -97,6 +97,9 @@ const App: React.FC = () => {
   const [activeFilter, setActiveFilter] = useState<'all' | 'installed' | 'update_available' | 'recommended'>('all');
   const [recommendedApps, setRecommendedApps] = useState<RecommendedApp[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  // 源 / 作者 过滤（点卡片徽章或详情里的名字进入，可清除）
+  const [activeSourceFilter, setActiveSourceFilter] = useState<string | null>(null);
+  const [activeAuthorFilter, setActiveAuthorFilter] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<CategoryKey | null>(null);
   const [pendingUninstallApp, setPendingUninstallApp] = useState<AppInfo | null>(null);
   // Apps can declare an install-time form (fnos/wizard/install). When one
@@ -555,13 +558,18 @@ const App: React.FC = () => {
     if (activeFilter === 'installed' && !app.installed) return false;
     if (activeFilter === 'update_available' && !app.has_update) return false;
     if (activeCategory && app.category !== activeCategory) return false;
+    if (activeSourceFilter && app.source !== activeSourceFilter) return false;
+    if (activeAuthorFilter && (app.maintainer || '') !== activeAuthorFilter) return false;
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const name = (app.display_name || '').toLowerCase();
       const appname = (app.appname || '').toLowerCase();
       const desc = (app.description || '').toLowerCase();
-      if (!name.includes(q) && !appname.includes(q) && !desc.includes(q)) return false;
+      const source = (app.source || '').toLowerCase();
+      const author = (app.maintainer || '').toLowerCase();
+      if (!name.includes(q) && !appname.includes(q) && !desc.includes(q)
+        && !source.includes(q) && !author.includes(q)) return false;
     }
 
     return true;
@@ -974,6 +982,34 @@ const App: React.FC = () => {
             </div>
           ) : loadStatus === 'loaded' ? (
             <>
+              {(activeSourceFilter || activeAuthorFilter) && (
+                <div className="flex items-center gap-2 mb-4 flex-wrap">
+                  <span className="text-xs text-muted-foreground">过滤：</span>
+                  {activeSourceFilter && (
+                    <button
+                      onClick={() => setActiveSourceFilter(null)}
+                      className="inline-flex items-center gap-1 rounded-full bg-primary text-primary-foreground px-3 h-7 text-xs font-medium hover:opacity-90"
+                      title="点击清除该过滤"
+                    >
+                      源：{activeSourceFilter}
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                  {activeAuthorFilter && (
+                    <button
+                      onClick={() => setActiveAuthorFilter(null)}
+                      className="inline-flex items-center gap-1 rounded-full bg-primary text-primary-foreground px-3 h-7 text-xs font-medium hover:opacity-90"
+                      title="点击清除该过滤"
+                    >
+                      作者：{activeAuthorFilter}
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                  <span className="text-xs text-muted-foreground/70">
+                    {filteredApps.length} 个应用
+                  </span>
+                </div>
+              )}
               <div className="hidden md:block">
                 <AppList
                    apps={filteredApps}
@@ -987,6 +1023,8 @@ const App: React.FC = () => {
                    filterType={activeFilter}
                    appOperations={appOperations}
                    searchQuery={searchQuery}
+                   onSourceFilter={setActiveSourceFilter}
+                   onAuthorFilter={setActiveAuthorFilter}
                 />
               </div>
               <div className="md:hidden">
@@ -1001,6 +1039,8 @@ const App: React.FC = () => {
                   searchQuery={searchQuery}
                   filterType={activeFilter}
                   upgradeAllowed={upgradeAllowed}
+                  onSourceFilter={setActiveSourceFilter}
+                  onAuthorFilter={setActiveAuthorFilter}
                 />
               </div>
             </>
@@ -1128,6 +1168,8 @@ const App: React.FC = () => {
         onUnignoreUpdate={handleUnignoreUpdate}
         onUninstall={handleUninstall}
         operation={detailApp ? appOperations.get(detailApp.appname) : undefined}
+        onSourceFilter={setActiveSourceFilter}
+        onAuthorFilter={setActiveAuthorFilter}
       />
 
       {successInfo && (

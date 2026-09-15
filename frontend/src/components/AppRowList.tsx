@@ -21,6 +21,8 @@ interface AppRowListProps {
   filterType?: string;
   /** false when this fnOS build cannot update apps without destroying them. */
   upgradeAllowed?: boolean;
+  onSourceFilter?: (source: string) => void;
+  onAuthorFilter?: (author: string) => void;
 }
 
 const STATUS_TEXT: Record<string, string> = {
@@ -43,7 +45,7 @@ const statusColor = (s: string) =>
  * 的 e2e heading 选择器冲突（桌面布局下本组件 display:none）。
  */
 const AppRowList: React.FC<AppRowListProps> = ({
-  apps, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, appOperations, searchQuery, filterType, upgradeAllowed = true,
+  apps, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, appOperations, searchQuery, filterType, upgradeAllowed = true, onSourceFilter, onAuthorFilter,
 }) => {
   if (apps.length === 0) {
     const emptyText = searchQuery?.trim()
@@ -110,9 +112,19 @@ const AppRowList: React.FC<AppRowListProps> = ({
                 )}
               </div>
 
-              <p className="text-[13px] text-muted-foreground/80 truncate" title={app.appname}>
-                {app.appname}
-              </p>
+              {app.maintainer && onAuthorFilter ? (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onAuthorFilter(app.maintainer!); }}
+                  className="text-[13px] text-muted-foreground/80 truncate hover:text-primary transition-colors"
+                  title={`只看「${app.maintainer}」的应用`}
+                >
+                  {app.maintainer}
+                </button>
+              ) : (
+                <p className="text-[13px] text-muted-foreground/80 truncate" title={app.appname}>
+                  {app.appname}
+                </p>
+              )}
 
               {app.description && (
                 <p className="text-[13px] text-muted-foreground/80 leading-snug line-clamp-2 mt-0.5">
@@ -133,13 +145,17 @@ const AppRowList: React.FC<AppRowListProps> = ({
                     </span>
                   </>
                 )}
-                {/* 内置目录应用 source=fnos-apps，不显示；仅外部 FnDepot 源应用标注来源 */}
+                {/* 内置目录应用 source=fnos-apps，不显示；仅外部 FnDepot 源应用标注来源（可点击过滤） */}
                 {app.source && app.source !== 'fnos-apps' && (
                   <>
                     <span className="text-muted-foreground/30">·</span>
-                    <span className="inline-flex items-center gap-0.5 text-primary/80" title={`来源：${app.source}`}>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onSourceFilter?.(app.source!); }}
+                      className="inline-flex items-center gap-0.5 text-primary/80 hover:text-primary transition-colors"
+                      title={`只看「${app.source}」源的应用`}
+                    >
                       <Globe className="h-3 w-3" />{app.source}
-                    </span>
+                    </button>
                   </>
                 )}
                 {isInstalled && (

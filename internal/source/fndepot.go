@@ -1,6 +1,7 @@
 package source
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
@@ -35,9 +36,18 @@ type FNDepotSource struct {
 	jsonURL    string     // 解析后的 JSON 地址
 	fallbacks  []string   // GitHub 仓库模式的分支回退地址
 	id         string     // 稳定 ID（sha1(原始地址)）
-	name       string     // 源显示名（source_info.name 优先，否则仓库名/主机名）
+	name       string     // 源显示名（source_info.name 优先，其次仓库 owner，最后仓库名/主机名）
+	owner      string     // GitHub 仓库 owner（自动源名用）
 	author     string
 	homepage   string
+}
+
+// fndepotGitHubOwner 从源地址提取 GitHub owner（非 GitHub 地址返回空）。
+func fndepotGitHubOwner(rawURL string) string {
+	if m := githubRepoRE.FindStringSubmatch(strings.TrimSuffix(strings.TrimSpace(rawURL), "/")); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // FNDepotSourceMeta 是源的管理元信息（列表展示用）。
@@ -63,12 +73,15 @@ type fndepotSourceInfo struct {
 }
 
 type fndepotRelease struct {
+	Changelog string                `json:"changelog"`
 	UpdatedAt string                `json:"updated_at"`
 	Packages  map[string]fndepotPkg `json:"packages"`
 }
 
 type fndepotPkg struct {
 	DownloadURL string `json:"download_url"`
+	SHA256      string `json:"sha256"`
+	Size        int64  `json:"size"`
 }
 
 type fndepotAppEntry struct {
@@ -77,12 +90,61 @@ type fndepotAppEntry struct {
 	Platform      json.RawMessage `json:"platform"`
 	Categories    []string        `json:"categories"`
 	IconURL       string          `json:"icon_url"`
-	MaintainerURL string          `json:"maintainer_url"`
+	ReadmeURL     string          `json:"readme_url"`
+	PreviewURLs   []string        `json:"preview_urls"`
+	Maintainer     string          `json:"maintainer"`
+	MaintainerURL  string          `json:"maintainer_url"`
+	Distributor    string          `json:"distributor"`
+	DistributorURL string          `json:"distributor_url"`
 	BugReportURL  string          `json:"bug_report_url"`
 	Homepage      string          `json:"homepage"`
 	IsDocker      bool            `json:"is_docker"`
-	ServicePort   string          `json:"service_port"`
+	ServicePort   fndepotServicePort `json:"service_port"`
 	Releases      map[string]fndepotRelease `json:"releases"`
+
+	// V1 平铺单版本字段（旧格式源：无 schema_version、无 releases，
+	// 每个应用一个 version + download_url；分类用 labels 字符串，
+	// isdocker 为 "true"/"false" 字符串）。
+	Changelog   string `json:"changelog"`
+	Version     string `json:"version"`
+	Author      string `json:"author"`
+	AuthorURL   string `json:"author_url"`
+	DownloadURL string `json:"download_url"`
+	Labels      string `json:"labels"`
+	IsDockerV1  string `json:"isdocker"`
+}
+
+// parseV1Labels 把 V1 的 labels 字符串（"工具，娱乐" / "tools, ai"）拆成分类数组。
+func parseV1Labels(labels string) []string {
+	labels = strings.ReplaceAll(labels, "，", ",")
+	out := make([]string, 0, 2)
+	for _, part := range strings.Split(labels, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// fndepotServicePort 兼容 service_port 的字符串与数字两种写法。
+type fndepotServicePort string
+
+func (p *fndepotServicePort) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		*p = ""
+		return nil
+	}
+	if b[0] == '"' {
+		var str string
+		if err := json.Unmarshal(b, &str); err != nil {
+			return err
+		}
+		*p = fndepotServicePort(str)
+		return nil
+	}
+	*p = fndepotServicePort(string(b)) // 数字字面量，如 32678
+	return nil
 }
 
 var (
@@ -147,6 +209,7 @@ func NewFNDepotSource(rawURL string, configMgr *config.Manager) (*FNDepotSource,
 		configMgr:  configMgr,
 		sourceURL:  rawURL,
 		id:         fndepotSourceID(rawURL),
+		owner:      fndepotGitHubOwner(rawURL),
 	}
 
 	jsonURL, fallbacks := resolveJSONURL(u)
@@ -230,6 +293,7 @@ func NewFNDepotSourceLazy(rawURL string, configMgr *config.Manager) (*FNDepotSou
 		jsonURL:    jsonURL,
 		fallbacks:  fallbacks,
 		id:         fndepotSourceID(rawURL),
+		owner:      fndepotGitHubOwner(rawURL),
 	}, nil
 }
 
@@ -278,6 +342,9 @@ func (s *FNDepotSource) parse(body []byte, jsonURL string) error {
 		s.name = strings.TrimSpace(v2.SourceInfo.Name)
 		s.author = v2.SourceInfo.Author
 		s.homepage = v2.SourceInfo.Homepage
+	}
+	if s.name == "" && s.owner != "" {
+		s.name = s.owner // GitHub 源：owner 名（如 Blue-Mink）比仓库名更可读
 	}
 	if s.name == "" {
 		s.name = sourceNameFromURL(jsonURL)
@@ -397,14 +464,22 @@ func resolveAgainst(base, ref string) string {
 	return baseU.ResolveReference(refU).String()
 }
 
+// fndepotSelectedPkg 是翻译选中的单个安装包。
+type fndepotSelectedPkg struct {
+	version   string
+	download  string
+	changelog string
+	updatedAt string
+	sha256    string
+	size      int64
+}
+
 // translateFndepotApp 把单个 FnDepot 应用翻译成 RemoteApp。
 // 选择规则：当前架构包优先 → all 包；版本号取最高。
+// 同时支持 V2（releases 多版本）与 V1 平铺单版本（version + download_url）。
 func translateFndepotApp(appName string, entry fndepotAppEntry, baseURL, sourceName string) (RemoteApp, bool) {
 	if !appnameRE.MatchString(appName) {
 		return RemoteApp{}, false
-	}
-	if len(entry.Releases) == 0 {
-		return RemoteApp{}, false // 拆分模式（details_url）暂不支持
 	}
 	if !fndepotPlatformOK(entry.Platform, fndepotCurrentArch()) {
 		return RemoteApp{}, false
@@ -413,51 +488,105 @@ func translateFndepotApp(appName string, entry fndepotAppEntry, baseURL, sourceN
 	if displayName == "" {
 		displayName = appName
 	}
-
-	versions := make([]string, 0, len(entry.Releases))
-	for v := range entry.Releases {
-		versions = append(versions, v)
-	}
-	sortByVersionDesc(versions)
-
 	current := fndepotCurrentArch()
-	for _, v := range versions {
-		release := entry.Releases[v]
-		pkg, ok := release.Packages[current]
-		if !ok {
-			pkg, ok = release.Packages["all"]
+
+	// 收集候选包：V2 走 releases（当前架构 → all，版本降序）；
+	// V1 平铺只有一个 version + download_url。
+	var sel fndepotSelectedPkg
+	var ok bool
+	if len(entry.Releases) > 0 {
+		versions := make([]string, 0, len(entry.Releases))
+		for v := range entry.Releases {
+			versions = append(versions, v)
 		}
-		if !ok || strings.TrimSpace(pkg.DownloadURL) == "" {
-			continue
-		}
-		port := 0
-		if ps := strings.TrimSpace(entry.ServicePort); ps != "" {
-			if n, err := strconv.Atoi(ps); err == nil {
-				port = n
+		sortByVersionDesc(versions)
+		for _, v := range versions {
+			release := entry.Releases[v]
+			pkg, found := release.Packages[current]
+			if !found {
+				pkg, found = release.Packages["all"]
 			}
+			if !found || strings.TrimSpace(pkg.DownloadURL) == "" {
+				continue
+			}
+			sel = fndepotSelectedPkg{
+				version:   v,
+				download:  pkg.DownloadURL,
+				changelog: release.Changelog,
+				updatedAt: release.UpdatedAt,
+				sha256:    pkg.SHA256,
+				size:      pkg.Size,
+			}
+			ok = true
+			break
 		}
-		appType := ""
-		if entry.IsDocker {
-			appType = "docker"
+	} else {
+		// V1 平铺单版本
+		if ver := strings.TrimSpace(entry.Version); ver != "" && strings.TrimSpace(entry.DownloadURL) != "" {
+			sel = fndepotSelectedPkg{version: ver, download: entry.DownloadURL}
+			ok = true
 		}
-		return RemoteApp{
-			AppName:     appName,
-			DisplayName: displayName,
-			Version:     v,
-			FpkVersion:  v,
-			Description: stripHTML(entry.Desc),
-			HomepageURL: firstNonEmpty(entry.Homepage, entry.MaintainerURL, entry.BugReportURL),
-			UpdatedAt:   release.UpdatedAt,
-			ServicePort: port,
-			Platforms:   []string{current},
-			FpkURL:      resolveAgainst(baseURL, pkg.DownloadURL),
-			IconURL:     resolveAgainst(baseURL, entry.IconURL),
-			AppType:     appType,
-			Category:    mapFndepotCategory(entry.Categories),
-			Source:      sourceName,
-		}, true
+		// 否则：无 releases 也无平铺包（如拆分模式 details_url）→ 暂不支持
 	}
-	return RemoteApp{}, false
+	if !ok {
+		return RemoteApp{}, false
+	}
+
+	port := 0
+	if ps := strings.TrimSpace(string(entry.ServicePort)); ps != "" {
+		if n, err := strconv.Atoi(ps); err == nil {
+			port = n
+		}
+	}
+
+	// 分类：V2 categories 数组优先；V1 用 labels 字符串拆分。
+	cats := entry.Categories
+	if len(cats) == 0 && strings.TrimSpace(entry.Labels) != "" {
+		cats = parseV1Labels(entry.Labels)
+	}
+
+	// Docker：V2 is_docker 布尔；V1 isdocker 字符串 "true"/"false"。
+	isDocker := entry.IsDocker || strings.EqualFold(strings.TrimSpace(entry.IsDockerV1), "true")
+
+	previewURLs := make([]string, 0, len(entry.PreviewURLs))
+	for _, p := range entry.PreviewURLs {
+		if abs := resolveAgainst(baseURL, p); abs != "" {
+			previewURLs = append(previewURLs, abs)
+		}
+	}
+
+	return RemoteApp{
+		AppName:        appName,
+		DisplayName:    displayName,
+		Version:        sel.version,
+		FpkVersion:     sel.version,
+		Description:    stripHTML(entry.Desc),
+		HomepageURL:    firstNonEmpty(entry.Homepage, entry.MaintainerURL, entry.BugReportURL),
+		UpdatedAt:      sel.updatedAt,
+		ServicePort:    port,
+		Platforms:      []string{current},
+		FpkURL:         resolveAgainst(baseURL, sel.download),
+		IconURL:        resolveAgainst(baseURL, entry.IconURL),
+		AppType:        appTypeOf(isDocker),
+		Category:       mapFndepotCategory(cats),
+		Source:         sourceName,
+		ReadmeURL:      resolveAgainst(baseURL, entry.ReadmeURL),
+		PreviewURLs:    previewURLs,
+		Maintainer:     strings.TrimSpace(firstNonEmpty(entry.Maintainer, entry.Author)),
+		MaintainerURL:  strings.TrimSpace(firstNonEmpty(entry.MaintainerURL, entry.AuthorURL)),
+		Distributor:    strings.TrimSpace(entry.Distributor),
+		DistributorURL: strings.TrimSpace(entry.DistributorURL),
+		Changelog:      firstNonEmpty(sel.changelog, entry.Changelog),
+		SizeBytes:      sel.size,
+		SHA256:         strings.TrimSpace(sel.sha256),
+	}, true
+}
+
+func appTypeOf(docker bool) string {
+	if docker {
+		return "docker"
+	}
+	return ""
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -475,20 +604,21 @@ func stripHTML(s string) string {
 }
 
 // mapFndepotCategory 把 FnDepot 固定分类映射到本店分类键（未匹配返回空）。
+// mapFndepotCategory 把 FnDepot 固定分类或 V1 自由分类词映射到本店分类键。
 func mapFndepotCategory(cats []string) string {
 	if len(cats) == 0 {
 		return ""
 	}
-	switch cats[0] {
-	case "影音娱乐":
+	switch strings.TrimSpace(cats[0]) {
+	case "影音娱乐", "娱乐", "影音", "音乐", "视频":
 		return "media"
-	case "AI赋能":
+	case "AI赋能", "AI", "ai":
 		return "ai"
-	case "系统工具", "编程开发", "硬件驱动", "智能智控":
+	case "系统工具", "工具", "安全", "网络", "编程开发", "硬件驱动", "智能智控", "下载", "浏览器", "系统":
 		return "system"
-	case "生活服务", "教育学习":
+	case "生活服务", "教育学习", "教育":
 		return "content"
-	case "游戏地带":
+	case "游戏地带", "游戏":
 		return "media"
 	default:
 		return ""

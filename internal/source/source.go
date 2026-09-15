@@ -22,6 +22,17 @@ type RemoteApp struct {
 	Category        string
 	Source          string
 	PostInstallNote string
+
+	// 外部源详情页扩展元数据（内置目录通常为空）。
+	ReadmeURL      string   // README 地址（详情页 Markdown 渲染）
+	PreviewURLs    []string // 预览图（详情页画廊）
+	Maintainer     string   // 开发者/作者
+	MaintainerURL  string
+	Distributor    string   // 发布者（与开发者不同时展示）
+	DistributorURL string
+	Changelog      string   // 当前版本更新说明
+	SizeBytes      int64    // 安装包字节数（源提供时）
+	SHA256         string   // 安装包 sha256（源提供时）
 }
 
 // Source provides access to a remote app catalog.
