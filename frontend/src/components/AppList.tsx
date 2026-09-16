@@ -19,6 +19,7 @@ interface AppListProps {
   upgradeAllowed?: boolean;
   onSourceFilter?: (source: string) => void;
   onAuthorFilter?: (author: string) => void;
+  onDistributorFilter?: (distributor: string) => void;
 }
 
 const getEmptyMessage = (filterType?: string) => {
@@ -32,7 +33,7 @@ const getEmptyMessage = (filterType?: string) => {
   }
 };
 
-const AppList: React.FC<AppListProps> = ({ apps, loading, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, filterType, appOperations, searchQuery, upgradeAllowed, onSourceFilter, onAuthorFilter }) => {
+const AppList: React.FC<AppListProps> = ({ apps, loading, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, filterType, appOperations, searchQuery, upgradeAllowed, onSourceFilter, onAuthorFilter, onDistributorFilter }) => {
   if (loading) {
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -83,6 +84,7 @@ const AppList: React.FC<AppListProps> = ({ apps, loading, onInstall, onUpdate, o
           upgradeAllowed={upgradeAllowed}
           onSourceFilter={onSourceFilter}
           onAuthorFilter={onAuthorFilter}
+          onDistributorFilter={onDistributorFilter}
         />
       ))}
     </div>

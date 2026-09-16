@@ -8,6 +8,7 @@ import {
   Download, Package, Circle, Container, X, BellOff, Trash2, Globe,
 } from 'lucide-react';
 import { CheckCircle2, RefreshCw as UpdateIcon, Search } from 'lucide-react';
+import AppIcon from './AppIcon';
 
 interface AppRowListProps {
   apps: AppInfo[];
@@ -23,6 +24,7 @@ interface AppRowListProps {
   upgradeAllowed?: boolean;
   onSourceFilter?: (source: string) => void;
   onAuthorFilter?: (author: string) => void;
+  onDistributorFilter?: (distributor: string) => void;
 }
 
 const STATUS_TEXT: Record<string, string> = {
@@ -45,7 +47,7 @@ const statusColor = (s: string) =>
  * 的 e2e heading 选择器冲突（桌面布局下本组件 display:none）。
  */
 const AppRowList: React.FC<AppRowListProps> = ({
-  apps, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, appOperations, searchQuery, filterType, upgradeAllowed = true, onSourceFilter, onAuthorFilter,
+  apps, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, appOperations, searchQuery, filterType, upgradeAllowed = true, onSourceFilter, onAuthorFilter, onDistributorFilter,
 }) => {
   if (apps.length === 0) {
     const emptyText = searchQuery?.trim()
@@ -78,18 +80,7 @@ const AppRowList: React.FC<AppRowListProps> = ({
             onClick={() => onDetail(app)}
           >
             {/* 图标 */}
-            {app.icon_url ? (
-              <img
-                src={app.icon_url}
-                alt=""
-                className="w-14 h-14 squircle object-cover bg-muted/40 shrink-0"
-                loading="lazy"
-              />
-            ) : (
-              <div className="w-14 h-14 bg-muted/60 squircle flex items-center justify-center text-muted-foreground shrink-0">
-                <Package className="h-6 w-6 opacity-40" />
-              </div>
-            )}
+            <AppIcon app={app} className="w-14 h-14 shrink-0" />
 
             {/* 中部信息 */}
             <div className="flex-1 min-w-0">
@@ -158,6 +149,19 @@ const AppRowList: React.FC<AppRowListProps> = ({
                     </button>
                   </>
                 )}
+                {/* 发布者（与开发者不同时展示，可点击过滤） */}
+                {app.distributor && app.distributor !== app.maintainer && onDistributorFilter && (
+                  <>
+                    <span className="text-muted-foreground/30">·</span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onDistributorFilter(app.distributor!); }}
+                      className="inline-flex items-center gap-0.5 text-primary/80 hover:text-primary transition-colors"
+                      title={`只看「${app.distributor}」发布的应用`}
+                    >
+                      <Package className="h-3 w-3" />{app.distributor}
+                    </button>
+                  </>
+                )}
                 {isInstalled && (
                   <>
                     <span className="text-muted-foreground/30">·</span>
@@ -201,7 +205,7 @@ const AppRowList: React.FC<AppRowListProps> = ({
                     onClick={() => onInstall(app)}
                     className="pill bg-primary text-primary-foreground h-7 px-4 text-[13px] font-semibold shadow-sm active:opacity-80"
                   >
-                    获取
+                    安装
                   </button>
                 ) : canUpdate ? (
                   <button

@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import AppIcon from "./AppIcon";
 import { cn, formatSpeed, formatProgress, formatCount } from "@/lib/utils";
 import { 
   Download, 
@@ -33,9 +34,11 @@ interface AppCardProps {
   onSourceFilter?: (source: string) => void;
   /** 点击开发者 → 只看该作者的应用 */
   onAuthorFilter?: (author: string) => void;
+  /** 点击发布者 → 只看该发布者发布的应用 */
+  onDistributorFilter?: (distributor: string) => void;
 }
 
-const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, upgradeAllowed = true, onSourceFilter, onAuthorFilter }) => {
+const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, upgradeAllowed = true, onSourceFilter, onAuthorFilter, onDistributorFilter }) => {
   const isInstalled = app.installed;
   const canUpdate = isInstalled && app.has_update;
 
@@ -83,17 +86,7 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
 
         <div className="flex items-start gap-3 cursor-pointer" onClick={() => onDetail?.(app)}>
           <div className="shrink-0">
-            {app.icon_url ? (
-              <img
-                src={app.icon_url}
-                alt={app.display_name}
-                className="w-14 h-14 squircle object-cover bg-muted/40"
-              />
-            ) : (
-              <div className="w-14 h-14 bg-muted/60 squircle flex items-center justify-center text-muted-foreground">
-                <Package className="h-6 w-6 opacity-40" />
-              </div>
-            )}
+            <AppIcon app={app} className="w-14 h-14" />
           </div>
 
           <div className="flex-1 min-w-0 flex flex-col gap-0.5">
@@ -136,7 +129,7 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
                 <button
                   onClick={(e) => { e.stopPropagation(); onAuthorFilter(app.maintainer!); }}
                   className="text-xs text-muted-foreground/80 truncate hover:text-primary transition-colors"
-                  title={`只看「${app.maintainer}」的应用`}
+                  title={`只看「${app.maintainer}」开发的应用`}
                 >
                   {app.maintainer}
                 </button>
@@ -144,6 +137,19 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
                 <span className="text-xs text-muted-foreground/80 truncate" title={app.appname}>
                   {app.appname}
                 </span>
+              )}
+              {app.distributor && app.distributor !== app.maintainer && onDistributorFilter && (
+                <>
+                  <span className="text-muted-foreground/30 shrink-0">·</span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDistributorFilter(app.distributor!); }}
+                    className="inline-flex items-center gap-0.5 text-xs text-muted-foreground/80 truncate hover:text-primary transition-colors shrink-0"
+                    title={`只看「${app.distributor}」发布的应用`}
+                  >
+                    <Package className="h-3 w-3 shrink-0" />
+                    <span className="max-w-[90px] truncate">{app.distributor}</span>
+                  </button>
+                </>
               )}
             </div>
 

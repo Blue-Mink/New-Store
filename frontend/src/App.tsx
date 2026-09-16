@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { LayoutGrid, CheckCircle2, RefreshCw, Settings, MessageCircle, ChevronsLeft, ChevronsRight, Search, X, Film, ArrowDownToLine, BookOpen, Wrench, Globe, LayoutList, ArrowUpDown, Loader2, CircleX, CircleCheck, WifiOff, ExternalLink, Package, Compass, Brain, Clapperboard, Network } from 'lucide-react';
+import { LayoutGrid, CheckCircle2, RefreshCw, Settings, MessageCircle, ChevronsLeft, ChevronsRight, Search, X, Film, ArrowDownToLine, BookOpen, Wrench, Globe, LayoutList, ArrowUpDown, ArrowLeft, Loader2, CircleX, CircleCheck, WifiOff, ExternalLink, Package, Compass, Brain, Clapperboard, Network } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Badge } from './components/ui/badge';
@@ -97,9 +97,10 @@ const App: React.FC = () => {
   const [activeFilter, setActiveFilter] = useState<'all' | 'installed' | 'update_available' | 'recommended'>('all');
   const [recommendedApps, setRecommendedApps] = useState<RecommendedApp[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  // 源 / 作者 过滤（点卡片徽章或详情里的名字进入，可清除）
+  // 源 / 开发者 / 发布者 过滤（点卡片徽章或详情里的名字进入，可清除）
   const [activeSourceFilter, setActiveSourceFilter] = useState<string | null>(null);
   const [activeAuthorFilter, setActiveAuthorFilter] = useState<string | null>(null);
+  const [activeDistributorFilter, setActiveDistributorFilter] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<CategoryKey | null>(null);
   const [pendingUninstallApp, setPendingUninstallApp] = useState<AppInfo | null>(null);
   // Apps can declare an install-time form (fnos/wizard/install). When one
@@ -560,6 +561,7 @@ const App: React.FC = () => {
     if (activeCategory && app.category !== activeCategory) return false;
     if (activeSourceFilter && app.source !== activeSourceFilter) return false;
     if (activeAuthorFilter && (app.maintainer || '') !== activeAuthorFilter) return false;
+    if (activeDistributorFilter && (app.distributor || '') !== activeDistributorFilter) return false;
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -568,8 +570,9 @@ const App: React.FC = () => {
       const desc = (app.description || '').toLowerCase();
       const source = (app.source || '').toLowerCase();
       const author = (app.maintainer || '').toLowerCase();
+      const distributor = (app.distributor || '').toLowerCase();
       if (!name.includes(q) && !appname.includes(q) && !desc.includes(q)
-        && !source.includes(q) && !author.includes(q)) return false;
+        && !source.includes(q) && !author.includes(q) && !distributor.includes(q)) return false;
     }
 
     return true;
@@ -892,6 +895,17 @@ const App: React.FC = () => {
         </div>
 
         <header className="hidden md:flex bg-card/70 backdrop-blur-xl border-b border-border/50 px-8 py-4 justify-between items-center sticky top-0 z-10">
+           <div className="flex items-center gap-2 shrink-0">
+              {activeFilter === 'recommended' && (
+                <button
+                  onClick={() => setActiveFilter('all')}
+                  className="inline-flex items-center gap-1 h-8 pl-1.5 pr-3 rounded-full text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  title="返回应用列表"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  返回
+                </button>
+              )}
            <h2 className="text-2xl font-bold tracking-tight shrink-0">
               {activeFilter === 'recommended' && '发现'}
               {activeFilter === 'all' && '应用'}
@@ -901,6 +915,7 @@ const App: React.FC = () => {
                 <span className="text-muted-foreground font-normal text-xl">{' · '}{CATEGORIES.find(c => c.key === activeCategory)?.label}</span>
               )}
            </h2>
+           </div>
            <div className="flex items-center gap-3">
                {activeFilter !== 'recommended' && (
                  <>
@@ -982,7 +997,7 @@ const App: React.FC = () => {
             </div>
           ) : loadStatus === 'loaded' ? (
             <>
-              {(activeSourceFilter || activeAuthorFilter) && (
+              {(activeSourceFilter || activeAuthorFilter || activeDistributorFilter) && (
                 <div className="flex items-center gap-2 mb-4 flex-wrap">
                   <span className="text-xs text-muted-foreground">过滤：</span>
                   {activeSourceFilter && (
@@ -1001,7 +1016,17 @@ const App: React.FC = () => {
                       className="inline-flex items-center gap-1 rounded-full bg-primary text-primary-foreground px-3 h-7 text-xs font-medium hover:opacity-90"
                       title="点击清除该过滤"
                     >
-                      作者：{activeAuthorFilter}
+                      开发者：{activeAuthorFilter}
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                  {activeDistributorFilter && (
+                    <button
+                      onClick={() => setActiveDistributorFilter(null)}
+                      className="inline-flex items-center gap-1 rounded-full bg-primary text-primary-foreground px-3 h-7 text-xs font-medium hover:opacity-90"
+                      title="点击清除该过滤"
+                    >
+                      发布者：{activeDistributorFilter}
                       <X className="h-3 w-3" />
                     </button>
                   )}
@@ -1025,6 +1050,7 @@ const App: React.FC = () => {
                    searchQuery={searchQuery}
                    onSourceFilter={setActiveSourceFilter}
                    onAuthorFilter={setActiveAuthorFilter}
+                   onDistributorFilter={setActiveDistributorFilter}
                 />
               </div>
               <div className="md:hidden">
@@ -1041,6 +1067,7 @@ const App: React.FC = () => {
                   upgradeAllowed={upgradeAllowed}
                   onSourceFilter={setActiveSourceFilter}
                   onAuthorFilter={setActiveAuthorFilter}
+                  onDistributorFilter={setActiveDistributorFilter}
                 />
               </div>
             </>
@@ -1170,6 +1197,7 @@ const App: React.FC = () => {
         operation={detailApp ? appOperations.get(detailApp.appname) : undefined}
         onSourceFilter={setActiveSourceFilter}
         onAuthorFilter={setActiveAuthorFilter}
+        onDistributorFilter={setActiveDistributorFilter}
       />
 
       {successInfo && (

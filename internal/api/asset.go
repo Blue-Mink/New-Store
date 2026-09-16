@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"fnos-store/internal/config"
+	"fnos-store/internal/core"
 )
 
 // 应用详情页资源代理：README（Markdown）与预览图。
@@ -35,6 +36,36 @@ type assetCache struct {
 }
 
 var appAssetCache = newAssetCache(128)
+
+// iconProbeCache 记录「该应用探测过所有候选图标路径都没有图标」的结论，
+// 30 分钟内不再重复探测，避免每次打开详情页都打一轮请求。
+type iconProbe struct {
+	mu sync.Mutex
+	m  map[string]time.Time
+}
+
+var iconProbeCache = &iconProbe{m: make(map[string]time.Time)}
+
+const iconProbeTTL = 30 * time.Minute
+
+func (c *iconProbe) isBlocked(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t, ok := c.m[key]
+	if !ok || time.Now().After(t) {
+		return false
+	}
+	return true
+}
+
+func (c *iconProbe) mark(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.m) > 512 {
+		c.m = make(map[string]time.Time)
+	}
+	c.m[key] = time.Now().Add(iconProbeTTL)
+}
 
 func newAssetCache(max int) *assetCache {
 	return &assetCache{entries: make(map[string]assetCacheEntry), max: max}
@@ -103,8 +134,18 @@ func (s *Server) handleAppAsset(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		target, kind = app.PreviewURLs[idx], "preview"
+	case "icon":
+		body, ct, err := s.resolveAppIcon(r.Context(), app)
+		if err != nil {
+			writeAPIError(w, http.StatusNotFound, "该应用没有可用图标")
+			return
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+		_, _ = w.Write(body)
+		return
 	default:
-		writeAPIError(w, http.StatusBadRequest, "type must be readme or preview")
+		writeAPIError(w, http.StatusBadRequest, "type must be readme, preview or icon")
 		return
 	}
 	target = strings.TrimSpace(target)
@@ -132,6 +173,120 @@ func (s *Server) handleAppAsset(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "private, max-age=600")
 	_, _ = w.Write(body)
+}
+
+// normalizeGitHubURL 把 github.com blob 页面链接归一化为 raw 直链
+// （部分源把 ICON 写成 https://github.com/.../blob/main/ICON.PNG，
+// 直接 <img> 出来是 HTML 页面，图标必然加载失败）。
+func normalizeGitHubURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || !strings.HasSuffix(u.Host, "github.com") {
+		return rawURL
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	// 期望 [owner, repo, blob|raw, branch, path...]
+	for i, seg := range parts {
+		if seg == "blob" && i+2 < len(parts) {
+			branch := parts[i+1]
+			filePath := strings.Join(parts[i+2:], "/")
+			return "https://raw.githubusercontent.com/" + parts[0] + "/" + parts[1] + "/" + branch + "/" + filePath
+		}
+	}
+	return rawURL
+}
+
+// sourceBaseURL 按源名查配置里的源地址。
+func (s *Server) sourceBaseURL(name string) string {
+	if s.configMgr == nil || name == "" {
+		return ""
+	}
+	cfg := s.configMgr.Get()
+	for _, src := range cfg.Sources {
+		if src.Name == name || src.ID == name {
+			return strings.TrimRight(src.URL, "/")
+		}
+	}
+	return ""
+}
+
+// iconCandidates 推导外部源应用的候选图标地址（按优先级）：
+// FnDepot 仓库布局为 <appname>/ICON.PNG，兼容 ICON_256/icon.png 及仓库根 ICON。
+func iconCandidates(appName, sourceBase string) []string {
+	u, err := url.Parse(sourceBase)
+	if err != nil || u.Host == "" {
+		return nil
+	}
+	var base string
+	if strings.HasSuffix(u.Host, "github.com") {
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(parts) < 2 {
+			return nil
+		}
+		base = "https://raw.githubusercontent.com/" + parts[0] + "/" + parts[1] + "/HEAD/"
+	} else {
+		// 源地址本身就是 raw 或任意 https 直链（指向 fnpack.json 等）：
+		// 以其所在目录为基准。
+		base = strings.TrimSuffix(sourceBase, path.Base(sourceBase))
+		if base == sourceBase || !strings.HasSuffix(base, "/") {
+			base += "/"
+		}
+	}
+	return []string{
+		base + appName + "/ICON.PNG",
+		base + appName + "/ICON_256.PNG",
+		base + appName + "/icon.png",
+		base + "ICON.PNG",
+		base + "ICON_256.PNG",
+	}
+}
+
+// resolveAppIcon 返回应用图标字节：优先应用声明的 icon_url，
+// 为空则按源仓库布局探测候选路径（整体 25 秒预算）。
+func (s *Server) resolveAppIcon(ctx context.Context, app core.AppInfo) ([]byte, string, error) {
+	cacheKey := app.AppKey() + "/icon/"
+	if app.IconURL != "" {
+		target := normalizeGitHubURL(strings.TrimSpace(app.IconURL))
+		key := cacheKey + target
+		if e, ok := appAssetCache.get(key); ok {
+			return e.body, e.contentType, nil
+		}
+		body, ct, err := s.fetchAsset(ctx, target)
+		if err != nil {
+			// 声明的图标拉不到时继续尝试按仓库布局探测。
+			return s.probeIconCandidates(ctx, app, cacheKey)
+		}
+		appAssetCache.put(key, assetCacheEntry{body: body, contentType: ct, expiresAt: time.Now().Add(assetTTL)})
+		return body, ct, nil
+	}
+	return s.probeIconCandidates(ctx, app, cacheKey)
+}
+
+func (s *Server) probeIconCandidates(ctx context.Context, app core.AppInfo, cacheKey string) ([]byte, string, error) {
+	if iconProbeCache.isBlocked(app.AppKey()) {
+		return nil, "", fmt.Errorf("无图标")
+	}
+	candidates := iconCandidates(app.AppName, s.sourceBaseURL(app.Source))
+	if len(candidates) == 0 {
+		return nil, "", fmt.Errorf("无法推导图标路径")
+	}
+	pctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	var lastErr error
+	for _, cand := range candidates {
+		key := cacheKey + cand
+		if e, ok := appAssetCache.get(key); ok {
+			return e.body, e.contentType, nil
+		}
+		body, ct, err := s.fetchAsset(pctx, cand)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		appAssetCache.put(key, assetCacheEntry{body: body, contentType: ct, expiresAt: time.Now().Add(1 * time.Hour)})
+		return body, ct, nil
+	}
+	iconProbeCache.mark(app.AppKey())
+	return nil, "", lastErr
 }
 
 // fetchAsset 抓取目标资源：GitHub raw 地址按镜像链回退，其余直连。

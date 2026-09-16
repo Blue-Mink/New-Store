@@ -134,8 +134,8 @@ func (s *Server) handleBatchAddSources(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "items 不能为空")
 		return
 	}
-	if len(req.Items) > 20 {
-		writeAPIError(w, http.StatusRequestEntityTooLarge, "单次最多添加 20 个源")
+	if len(req.Items) > 150 {
+		writeAPIError(w, http.StatusRequestEntityTooLarge, "单次最多添加 150 个源")
 		return
 	}
 

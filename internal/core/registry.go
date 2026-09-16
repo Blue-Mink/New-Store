@@ -89,7 +89,18 @@ func (r *Registry) Merge(local []Manifest, remote []source.RemoteApp, installedT
 
 	r.apps = make(map[string]AppInfo, len(remote))
 	result := make([]AppInfo, 0, len(remote))
+	// 外部源去重：同名且同版本的应用在不同源里经常是同一份包的转载，
+	// 列表里只保留第一个（remote 顺序=内置目录在前，外部源按配置顺序）。
+	// 不同版本仍分别展示（如内置 3.2.7 与外部 3.2.6 并存）。
+	seenExtNameVersion := make(map[string]bool)
 	for _, item := range remote {
+		if item.Source != "" && item.Source != "fnos-apps" {
+			dupKey := item.AppName + "|" + item.Version
+			if seenExtNameVersion[dupKey] {
+				continue
+			}
+			seenExtNameVersion[dupKey] = true
+		}
 		localManifest, installed := localByName[item.AppName]
 		app := AppInfo{
 			AppName:         item.AppName,

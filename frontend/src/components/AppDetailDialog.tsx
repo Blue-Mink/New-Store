@@ -13,6 +13,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
+import AppIcon from "./AppIcon";
 import {
   Package,
   Globe,
@@ -54,6 +56,8 @@ interface AppDetailDialogProps {
   onSourceFilter?: (source: string) => void;
   /** 点击作者 → 只看该作者的应用 */
   onAuthorFilter?: (author: string) => void;
+  /** 点击发布者 → 只看该发布者发布的应用 */
+  onDistributorFilter?: (distributor: string) => void;
 }
 
 const DetailRow: React.FC<{ icon: React.ElementType; label: string; children: React.ReactNode }> = ({ icon: Icon, label, children }) => (
@@ -73,7 +77,7 @@ const formatSize = (bytes?: number): string => {
   return (bytes / 1024).toFixed(0) + ' KB';
 };
 
-const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChange, onInstall, onUpdate, onIgnoreUpdate, onUnignoreUpdate, onUninstall, operation, onSourceFilter, onAuthorFilter }) => {
+const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChange, onInstall, onUpdate, onIgnoreUpdate, onUnignoreUpdate, onUninstall, operation, onSourceFilter, onAuthorFilter, onDistributorFilter }) => {
   const [readme, setReadme] = useState<string | null>(null);
   const [readmeError, setReadmeError] = useState(false);
   const [lightbox, setLightbox] = useState<number | null>(null);
@@ -158,17 +162,7 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
         <div className="shrink-0 border-b border-border/60 bg-background px-4 pt-4 pb-3 sm:px-5 sm:pt-5">
           <DialogHeader className="space-y-0">
           <div className="flex items-center gap-3 pr-8">
-            {app.icon_url ? (
-              <img
-                src={app.icon_url}
-                alt={app.display_name}
-                className="w-14 h-14 rounded-xl object-cover bg-background dark:bg-muted/60 dark:ring-1 dark:ring-border/50 shrink-0"
-              />
-            ) : (
-              <div className="w-14 h-14 bg-muted/60 rounded-xl flex items-center justify-center text-muted-foreground shrink-0">
-                <Package className="h-6 w-6 opacity-40" />
-              </div>
-            )}
+            <AppIcon app={app} className="w-14 h-14 rounded-xl shrink-0" />
             <div className="flex-1 min-w-0">
               <DialogTitle className="text-base">{app.display_name}</DialogTitle>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
@@ -215,14 +209,20 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
                   </button>
                 )}
                 {app.distributor && app.distributor !== app.maintainer && (
-                  <span className="text-[11px] text-muted-foreground/70">
+                  <button
+                    onClick={() => { if (onDistributorFilter) { onOpenChange(false); onDistributorFilter(app.distributor!); } }}
+                    className={cn("inline-flex items-center gap-0.5 rounded-full px-2 h-5 text-[11px] font-medium transition-colors",
+                      onDistributorFilter ? "bg-muted text-muted-foreground hover:text-primary hover:bg-primary/10" : "text-muted-foreground/70")}
+                    title={onDistributorFilter ? `只看「${app.distributor}」发布的应用` : `发布：${app.distributor}`}
+                  >
+                    <Package className="h-3 w-3" />
                     发布：{app.distributor}
                     {app.distributor_url && (
-                      <a href={app.distributor_url} target="_blank" rel="noreferrer" className="inline-flex ml-0.5 hover:text-primary">
+                      <a href={app.distributor_url} target="_blank" rel="noreferrer" className="inline-flex ml-0.5 hover:text-primary" onClick={(e) => e.stopPropagation()}>
                         <ExternalLink className="h-2.5 w-2.5" />
                       </a>
                     )}
-                  </span>
+                  </button>
                 )}
               </div>
             </div>

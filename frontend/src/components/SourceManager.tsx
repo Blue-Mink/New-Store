@@ -18,8 +18,7 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
   const [adding, setAdding] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
-  // 内置源列表自动同步
-  const [listUrl, setListUrl] = useState('');
+  // 内置源列表自动同步（列表地址固定用内置/配置值，界面不再暴露输入框）
   const [listAuto, setListAuto] = useState(true);
   const [syncingList, setSyncingList] = useState(false);
   const [savingList, setSavingList] = useState(false);
@@ -39,14 +38,14 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
     load();
     fetchSettings()
       .then((s) => {
-        setListUrl(s.source_list_url || '');
         setListAuto(!(s.source_list_disabled ?? false));
       })
       .catch(() => {});
   }, [load]);
 
-  // 保存源列表设置（带上现有设置全量回传，避免覆盖其它配置）
-  const persistListSettings = useCallback(async (url?: string, auto?: boolean) => {
+  // 保存源列表设置（带上现有设置全量回传，避免覆盖其它配置；
+  // 列表地址沿用当前值，界面已不提供修改入口）
+  const persistListSettings = useCallback(async (auto?: boolean) => {
     const cur = await fetchSettings();
     await updateSettings({
       check_interval_hours: cur.check_interval_hours,
@@ -55,29 +54,17 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
       custom_github_mirror: cur.custom_github_mirror,
       custom_docker_mirror: cur.custom_docker_mirror,
       install_volume: cur.install_volume,
-      source_list_url: (url ?? listUrl).trim() || undefined,
+      source_list_url: cur.source_list_url,
       source_list_disabled: !(auto ?? listAuto),
     });
-  }, [listUrl, listAuto]);
+  }, [listAuto]);
 
   const handleListAutoChange = async (v: boolean) => {
     setListAuto(v);
     setSavingList(true);
     try {
-      await persistListSettings(undefined, v);
+      await persistListSettings(v);
       toast.success(v ? '已开启源列表自动同步' : '已关闭源列表自动同步');
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : '保存设置失败');
-    } finally {
-      setSavingList(false);
-    }
-  };
-
-  const handleSaveListUrl = async () => {
-    setSavingList(true);
-    try {
-      await persistListSettings();
-      toast.success('源列表地址已保存');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '保存设置失败');
     } finally {
@@ -193,29 +180,18 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
           </div>
           <Switch checked={listAuto} onCheckedChange={handleListAutoChange} disabled={savingList || syncingList} title="开启后每次目录检查自动添加列表中的新源" />
         </div>
-        <div className="flex items-center gap-2">
-          <input
-            value={listUrl}
-            onChange={(e) => setListUrl(e.target.value)}
-            onBlur={handleSaveListUrl}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
-            placeholder="留空 = 内置社区源列表（710850609/FnDepot）"
-            className="min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs placeholder:text-muted-foreground/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 shrink-0 gap-1.5"
-            onClick={handleSyncList}
-            disabled={syncingList || savingList}
-            title="立即抓取源列表并自动添加新源"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${syncingList ? 'animate-spin text-primary' : ''}`} />
-            {syncingList ? '同步中…' : '立即同步'}
-          </Button>
-        </div>
+        <Button
+          variant="outline"
+          className="h-9 w-full gap-1.5"
+          onClick={handleSyncList}
+          disabled={syncingList || savingList}
+          title="立即抓取内置社区源列表并自动添加新源（单次最多 150 个）"
+        >
+          <RefreshCw className={`h-4 w-4 ${syncingList ? 'animate-spin text-primary' : ''}`} />
+          {syncingList ? '同步中…' : '立即同步源列表'}
+        </Button>
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          从源列表（每行一个 FnDepot 仓库地址）自动发现并添加新应用源；抓取走设置的 GitHub 加速镜像链。
+          从内置社区源列表自动发现并添加新应用源，单次最多添加 150 个；抓取走设置的 GitHub 加速镜像链。
         </p>
       </div>
 
