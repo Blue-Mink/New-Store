@@ -20,6 +20,8 @@ interface AppListProps {
   onSourceFilter?: (source: string) => void;
   onAuthorFilter?: (author: string) => void;
   onDistributorFilter?: (distributor: string) => void;
+  onControl?: (app: AppInfo, action: 'start' | 'stop') => void;
+  controlling?: string | null;
 }
 
 const getEmptyMessage = (filterType?: string) => {
@@ -33,7 +35,7 @@ const getEmptyMessage = (filterType?: string) => {
   }
 };
 
-const AppList: React.FC<AppListProps> = ({ apps, loading, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, filterType, appOperations, searchQuery, upgradeAllowed, onSourceFilter, onAuthorFilter, onDistributorFilter }) => {
+const AppList: React.FC<AppListProps> = ({ apps, loading, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, filterType, appOperations, searchQuery, upgradeAllowed, onSourceFilter, onAuthorFilter, onDistributorFilter, onControl, controlling }) => {
   if (loading) {
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -85,6 +87,8 @@ const AppList: React.FC<AppListProps> = ({ apps, loading, onInstall, onUpdate, o
           onSourceFilter={onSourceFilter}
           onAuthorFilter={onAuthorFilter}
           onDistributorFilter={onDistributorFilter}
+          onControl={onControl}
+          controlling={controlling}
         />
       ))}
     </div>

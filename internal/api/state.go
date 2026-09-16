@@ -56,11 +56,37 @@ func (s *Server) refreshRegistry(ctx context.Context) error {
 		installedTags = s.cacheStore.InstalledTags()
 	}
 
+	// 全部外部源抓取失败 + 本次没有外部应用 + 现有注册表已有外部应用时，
+	// 不重建注册表（否则整个外部目录被清空，要等下次定时刷新才恢复）；
+	// 保留旧数据，失败原因由源状态在 UI 展示。冷启动（注册表为空）照常合并。
+	allCustomFailed := false
+	if len(customStatus) > 0 {
+		allCustomFailed = true
+		for _, st := range customStatus {
+			if st.Error == "" {
+				allCustomFailed = false
+				break
+			}
+		}
+	}
+	newExternal := 0
+	if remoteApps != nil {
+		for _, a := range remoteApps {
+			if a.Source != "" && a.Source != "fnos-apps" {
+				newExternal++
+			}
+		}
+	}
+
 	now := time.Now()
 	s.mu.Lock()
 	// Preserve existing registry when all remote/cache/local fallbacks fail.
 	if remoteApps != nil || fetchErr == nil {
-		s.registry.Merge(localApps, remoteApps, installedTags)
+		if allCustomFailed && newExternal == 0 && s.registry.HasExternalApps() {
+			log.Printf("refresh: all %d custom sources failed; keeping previous registry to avoid losing external catalog", len(customStatus))
+		} else {
+			s.registry.Merge(localApps, remoteApps, installedTags)
+		}
 	}
 	s.lastCheck = now
 	if len(customStatus) > 0 {
@@ -110,6 +136,17 @@ func (s *Server) refreshRuntimeStatus() {
 	// so apps whose /var/apps manifest the scan missed still show as
 	// installed instead of dead-ending on install (#280/#281).
 	s.registry.ReconcileInstalled(versions)
+	// 应用中心已安装但目录未收录的应用（如官方应用中心安装的 app）并入列表
+	localApps := make([]core.LocalApp, 0, len(apps))
+	for _, a := range apps {
+		localApps = append(localApps, core.LocalApp{
+			AppName:     a.AppName,
+			DisplayName: a.DisplayName,
+			Version:     a.Version,
+			Status:      a.Status,
+		})
+	}
+	s.registry.AddLocalApps(localApps)
 	s.mu.Unlock()
 }
 

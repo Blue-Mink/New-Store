@@ -133,6 +133,11 @@ func (r *Registry) Merge(local []Manifest, remote []source.RemoteApp, installedT
 			SHA256:              item.SHA256,
 		}
 
+		// 无分类的应用（外部源/未标注目录）按项目类型自动归类
+		if app.Category == "" {
+			app.Category = InferCategory(app.DisplayName, app.AppName, app.Description)
+		}
+
 		if installed {
 			app.InstalledVersion = localManifest.Version
 			app.InstalledFpkVersion = localManifest.FpkVersion
@@ -227,6 +232,63 @@ func releaseTagPrefix(releaseTag string) (string, bool) {
 	return releaseTag[:idx], true
 }
 
+// HasExternalApps 报告注册表是否含外部源应用（排除内置目录与应用中心本地项）。
+// 调用方必须持有与 Merge 相同的锁。
+func (r *Registry) HasExternalApps() bool {
+	for _, app := range r.apps {
+		if app.Source != "" && app.Source != "fnos-apps" && app.Source != "fnOS应用中心" {
+			return true
+		}
+	}
+	return false
+}
+
+// LocalApp 是应用中心 daemon 上报的已安装应用（不限于 conversun 发行）。
+type LocalApp struct {
+	AppName     string
+	DisplayName string
+	Version     string
+	Status      string // "running" / "stopped" / "nostart"
+}
+
+// AddLocalApps 把「应用中心已安装、但任何目录源都没有收录」的应用并入列表，
+// 源标记为「fnOS应用中心」。目录条目（任意源的同名应用）优先，不重复添加。
+// 每次 Merge 后由 refreshRuntimeStatus 重新调用，保证与 daemon 列表同步。
+// 调用方必须持有与 Merge 相同的锁。
+func (r *Registry) AddLocalApps(local []LocalApp) {
+	for _, la := range local {
+		if la.AppName == "" {
+			continue
+		}
+		exists := false
+		for _, app := range r.apps {
+			if app.AppName == la.AppName {
+				exists = true
+				break
+			}
+		}
+		if exists {
+			continue
+		}
+		display := la.DisplayName
+		if display == "" {
+			display = la.AppName
+		}
+		app := AppInfo{
+			AppName:          la.AppName,
+			DisplayName:      display,
+			Source:           "fnOS应用中心",
+			Installed:        true,
+			InstalledVersion: la.Version,
+			LatestVersion:    la.Version,
+			Status:           AppStatusInstalledUpToDate,
+			Category:         InferCategory(display, la.AppName, ""),
+		}
+		r.apps[app.AppKey()] = app
+		r.lastResult = append(r.lastResult, app)
+	}
+}
+
 // ReconcileInstalled folds daemon-reported installed apps into the registry.
 //
 // The /var/apps manifest scan is the primary source of installed state, but
@@ -254,12 +316,14 @@ func (r *Registry) ReconcileInstalled(daemon map[string]string) {
 		r.lastResult[i].Status = AppStatusInstalledUpToDate
 		r.lastResult[i].HasRevisionUpdate = false
 
-		if app, ok := r.apps[r.lastResult[i].AppName]; ok {
+		// 注意：外部源条目的 map key 是 appname@源名，必须用 AppKey() 回写，
+		// 否则详情页/安装/启停判断（走 r.apps）看不到已安装状态。
+		if app, ok := r.apps[r.lastResult[i].AppKey()]; ok {
 			app.Installed = true
 			app.InstalledVersion = ver
 			app.Status = AppStatusInstalledUpToDate
 			app.HasRevisionUpdate = false
-			r.apps[r.lastResult[i].AppName] = app
+			r.apps[r.lastResult[i].AppKey()] = app
 		}
 	}
 }

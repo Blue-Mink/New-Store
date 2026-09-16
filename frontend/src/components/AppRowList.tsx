@@ -5,7 +5,7 @@ import { cn, formatCount, formatSpeed, formatProgress } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import {
-  Download, Package, Circle, Container, X, BellOff, Trash2, Globe,
+  Download, Package, Circle, Container, X, BellOff, Trash2, Globe, Play, Square, Loader2,
 } from 'lucide-react';
 import { CheckCircle2, RefreshCw as UpdateIcon, Search } from 'lucide-react';
 import AppIcon from './AppIcon';
@@ -25,6 +25,8 @@ interface AppRowListProps {
   onSourceFilter?: (source: string) => void;
   onAuthorFilter?: (author: string) => void;
   onDistributorFilter?: (distributor: string) => void;
+  onControl?: (app: AppInfo, action: 'start' | 'stop') => void;
+  controlling?: string | null;
 }
 
 const STATUS_TEXT: Record<string, string> = {
@@ -47,7 +49,7 @@ const statusColor = (s: string) =>
  * 的 e2e heading 选择器冲突（桌面布局下本组件 display:none）。
  */
 const AppRowList: React.FC<AppRowListProps> = ({
-  apps, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, appOperations, searchQuery, filterType, upgradeAllowed = true, onSourceFilter, onAuthorFilter, onDistributorFilter,
+  apps, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, appOperations, searchQuery, filterType, upgradeAllowed = true, onSourceFilter, onAuthorFilter, onDistributorFilter, onControl, controlling,
 }) => {
   if (apps.length === 0) {
     const emptyText = searchQuery?.trim()
@@ -217,12 +219,30 @@ const AppRowList: React.FC<AppRowListProps> = ({
                     {upgradeAllowed ? '更新' : '需手动'}
                   </button>
                 ) : null}
+                {isInstalled && onControl && (
+                  <button
+                    onClick={() => onControl(app, app.status === 'running' ? 'stop' : 'start')}
+                    aria-label={`${app.status === 'running' ? '停用' : '启动'} ${app.display_name}`}
+                    title={app.status === 'running' ? '停用' : '启动'}
+                    disabled={controlling !== null}
+                    className="p-1.5 rounded-full text-muted-foreground/60 hover:text-primary hover:bg-primary/10 disabled:opacity-50"
+                  >
+                    {controlling === app.appname ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : app.status === 'running' ? (
+                      <Square className="h-3.5 w-3.5 fill-current" />
+                    ) : (
+                      <Play className="h-3.5 w-3.5 fill-current" />
+                    )}
+                  </button>
+                )}
                 {isInstalled && onUninstall && (
                   <button
                     onClick={() => onUninstall(app)}
                     aria-label={`卸载 ${app.display_name}`}
                     title="卸载"
-                    className="p-1.5 rounded-full text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10"
+                    disabled={controlling !== null}
+                    className="p-1.5 rounded-full text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 disabled:opacity-50"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>

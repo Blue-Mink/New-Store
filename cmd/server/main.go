@@ -69,6 +69,7 @@ func main() {
 		ConfigMgr:         cfgMgr,
 		CacheStore:        cacheStore,
 		AppsDir:           appsDir,
+		AppCenterDir:      appCenterDir(appsDir),
 		Platform:          platform.DetectPlatform(),
 		StoreApp:          storeAppName,
 		StaticFS:          storeassets.WebFS,
@@ -139,6 +140,24 @@ func defaultAppsDir(projectRoot string) string {
 		return "/var/apps"
 	}
 	return filepath.Join(projectRoot, "dev", "mock-apps")
+}
+
+// appCenterDir 定位应用中心程序目录（存放 ui/images 图标）。
+// 真机上 /var/apps 与 /vol1/@appcenter 是 fnOS 标准布局；
+// 也可用环境变量 APPCENTER_DIR 覆盖。找不到则返回空（图标回退占位）。
+func appCenterDir(appsDir string) string {
+	if v := os.Getenv("APPCENTER_DIR"); v != "" {
+		return v
+	}
+	for _, cand := range []string{"/vol1/@appcenter", "/vol2/@appcenter", "/vol3/@appcenter"} {
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+	}
+	if appsDir == "/var/apps" {
+		return ""
+	}
+	return ""
 }
 
 func defaultDataDir(projectRoot string) string {

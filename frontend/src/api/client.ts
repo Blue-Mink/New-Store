@@ -274,6 +274,15 @@ export const uninstallApp = (appname: string, onEvent: SSECallback): SSEHandle =
   return streamSSE(apiUrl(`/api/apps/${appname}/uninstall`), onEvent);
 };
 
+// 启动 / 停用已安装应用（与 fnOS 应用中心同步）
+export const controlApp = async (appname: string, action: 'start' | 'stop'): Promise<void> => {
+  const response = await fetch(apiUrl(`/api/apps/${encodeURIComponent(appname)}/${action}`), { method: 'POST' });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.error || `${action === 'start' ? '启动' : '停用'}失败: ${response.statusText}`);
+  }
+};
+
 export const reloadApps = (onEvent: SSECallback): SSEHandle => {
   return streamSSE(apiUrl('/api/apps/reload'), onEvent);
 };

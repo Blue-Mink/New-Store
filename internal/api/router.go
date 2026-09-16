@@ -28,6 +28,9 @@ type Server struct {
 	cacheStore        *cache.Store
 	scheduler         *scheduler.Scheduler
 	appsDir           string
+	// appCenterDir 是应用中心的程序目录（/vol1/@appcenter），用于读取
+	// 「fnOS应用中心」来源应用的本地图标（ui/images/icon-*.png）。可空。
+	appCenterDir      string
 	platform          string
 	storeApp          string
 	staticFS          fs.FS
@@ -60,6 +63,7 @@ type Config struct {
 	CacheStore        *cache.Store
 	Scheduler         *scheduler.Scheduler
 	AppsDir           string
+	AppCenterDir      string
 	Platform          string
 	StoreApp          string
 	StaticFS          fs.FS
@@ -86,6 +90,7 @@ func NewServer(cfg Config) *Server {
 		cacheStore:       cfg.CacheStore,
 		scheduler:        cfg.Scheduler,
 		appsDir:          cfg.AppsDir,
+		appCenterDir:     cfg.AppCenterDir,
 		platform:         cfg.Platform,
 		storeApp:         cfg.StoreApp,
 		staticFS:         cfg.StaticFS,
@@ -109,6 +114,8 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/apps/{appname}/install", s.handleInstall)
 	s.Mux.HandleFunc("POST /api/apps/{appname}/update", s.handleUpdate)
 	s.Mux.HandleFunc("POST /api/apps/{appname}/uninstall", s.handleUninstall)
+	s.Mux.HandleFunc("POST /api/apps/{appname}/start", func(w http.ResponseWriter, r *http.Request) { s.handleStartStop(w, r, "start") })
+	s.Mux.HandleFunc("POST /api/apps/{appname}/stop", func(w http.ResponseWriter, r *http.Request) { s.handleStartStop(w, r, "stop") })
 	s.Mux.HandleFunc("GET /api/apps/{appname}/download", s.handleDownloadFpk)
 	s.Mux.HandleFunc("GET /api/apps/{appname}/asset", s.handleAppAsset)
 	s.Mux.HandleFunc("GET /api/apps/{appname}/wizard", s.handleGetWizard)

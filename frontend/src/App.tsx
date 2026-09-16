@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { LayoutGrid, CheckCircle2, RefreshCw, Settings, MessageCircle, ChevronsLeft, ChevronsRight, Search, X, Film, ArrowDownToLine, BookOpen, Wrench, Globe, LayoutList, ArrowUpDown, ArrowLeft, Loader2, CircleX, CircleCheck, WifiOff, ExternalLink, Package, Compass, Brain, Clapperboard, Network } from 'lucide-react';
+import { LayoutGrid, CheckCircle2, RefreshCw, Settings, MessageCircle, ChevronsLeft, ChevronsRight, Search, X, Film, ArrowDownToLine, BookOpen, Wrench, Globe, ArrowUpDown, ArrowLeft, Loader2, CircleX, CircleCheck, WifiOff, ExternalLink, Package, Compass, Brain, Clapperboard, Network } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Badge } from './components/ui/badge';
@@ -13,7 +13,8 @@ import FeaturedShowcase from './components/FeaturedShowcase';
 import ThemeToggle from './components/ThemeToggle';
 import MobileDock from './components/MobileDock';
 import AppRowList from './components/AppRowList';
-import { fetchApps, triggerCheck, installApp, updateApp, uninstallApp, fetchStatus, fetchStoreUpdate, triggerStoreUpdate, reloadApps, ignoreUpdate, unignoreUpdate, fetchRecommended, fetchWizard } from './api/client';
+import { fetchApps, triggerCheck, installApp, updateApp, uninstallApp, fetchStatus, fetchStoreUpdate, triggerStoreUpdate, reloadApps, ignoreUpdate, unignoreUpdate, fetchRecommended, fetchWizard, controlApp } from './api/client';
+import { alphaInitial } from './lib/pinyin';
 import type { AppInfo, AppOperation, SSECallback, RecommendedApp, AppWizard, WizardParam } from './api/client';
 import { toast } from "sonner"
 import { Toaster } from "@/components/ui/sonner"
@@ -57,7 +58,7 @@ const CATEGORIES = [
 
 type CategoryKey = typeof CATEGORIES[number]['key'];
 
-type SortKey = 'default' | 'downloads' | 'name' | 'updated';
+type SortKey = 'default' | 'downloads' | 'name' | 'alpha' | 'updated';
 
 const App: React.FC = () => {
   const [apps, setApps] = useState<AppInfo[]>([]);
@@ -203,6 +204,21 @@ const App: React.FC = () => {
     } catch (error) {
       console.error('Failed to load apps:', error);
       triggerReload();
+    }
+  };
+
+  // 启动/停用已安装应用（与 fnOS 应用中心同步）
+  const [controlling, setControlling] = useState<string | null>(null);
+  const handleControl = async (app: AppInfo, action: 'start' | 'stop') => {
+    setControlling(app.appname);
+    try {
+      await controlApp(app.appname, action);
+      toast.success(action === 'start' ? `已启动「${app.display_name}」` : `已停用「${app.display_name}」`);
+      await loadApps();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : `${action === 'start' ? '启动' : '停用'}失败`);
+    } finally {
+      setControlling(null);
     }
   };
 
@@ -582,6 +598,17 @@ const App: React.FC = () => {
         return (b.download_count ?? 0) - (a.download_count ?? 0);
       case 'name':
         return (a.display_name || '').localeCompare(b.display_name || '');
+      case 'alpha': {
+        // 首字母 A-Z：字母优先（1Panel→P）、纯数字名 0-9、中文按拼音首字母
+        const ia = alphaInitial(a.display_name || a.appname);
+        const ib = alphaInitial(b.display_name || b.appname);
+        if (ia !== ib) {
+          if (ia === '#') return 1;
+          if (ib === '#') return -1;
+          return ia.localeCompare(ib);
+        }
+        return (a.display_name || '').localeCompare(b.display_name || '', 'zh-Hans-CN');
+      }
       case 'updated':
         return (b.updated_at || '').localeCompare(a.updated_at || '');
       default:
@@ -720,55 +747,6 @@ const App: React.FC = () => {
             </Tooltip>
           </nav>
           
-          {activeFilter !== 'recommended' && (
-            <div className={cn("border-t border-border", sidebarCollapsed ? "p-2 pt-3" : "px-4 pb-4 pt-3")}>
-              {!sidebarCollapsed && (
-                <p className="text-xs font-medium text-muted-foreground mb-2 px-3">分类</p>
-              )}
-              <div className="space-y-1">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant={activeCategory === null ? 'secondary' : 'ghost'}
-                      className={cn("w-full h-10 shadow-none", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
-                      onClick={() => setActiveCategory(null)}
-                    >
-                      <LayoutList className={cn("h-4 w-4 shrink-0", !sidebarCollapsed && "mr-3")} />
-                      {!sidebarCollapsed && (
-                        <span className="flex-1 text-left whitespace-nowrap">全部</span>
-                      )}
-                    </Button>
-                  </TooltipTrigger>
-                  {sidebarCollapsed && <TooltipContent side="right">全部</TooltipContent>}
-                </Tooltip>
-                {CATEGORIES.map(cat => {
-                  const Icon = cat.icon;
-                  const isActive = activeCategory === cat.key;
-                  const count = categoryCounts[cat.key];
-                  return (
-                    <Tooltip key={cat.key}>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant={isActive ? 'secondary' : 'ghost'}
-                          className={cn("w-full h-10 shadow-none", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
-                          onClick={() => setActiveCategory(cat.key)}
-                        >
-                          <Icon className={cn("h-4 w-4 shrink-0", !sidebarCollapsed && "mr-3")} />
-                          {!sidebarCollapsed && (
-                            <>
-                              <span className="flex-1 text-left whitespace-nowrap">{cat.label}</span>
-                              <span className="ml-auto text-xs text-muted-foreground tabular-nums">{count}</span>
-                            </>
-                          )}
-                        </Button>
-                      </TooltipTrigger>
-                      {sidebarCollapsed && <TooltipContent side="right">{cat.label} ({count})</TooltipContent>}
-                    </Tooltip>
-                  );
-                })}
-              </div>
-            </div>
-          )}
          </div>
 
          <div className={cn("mt-auto border-t border-border space-y-1", sidebarCollapsed ? "p-2" : "p-4")}>
@@ -890,6 +868,19 @@ const App: React.FC = () => {
                     {cat.label}
                   </button>
                 ))}
+                <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
+                  <SelectTrigger className="shrink-0 h-8 w-[110px] rounded-full border-0 bg-muted/60 shadow-none text-[13px]">
+                    <ArrowUpDown className="h-3 w-3 mr-1" />
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">默认</SelectItem>
+                    <SelectItem value="alpha">首字母 A-Z</SelectItem>
+                    <SelectItem value="downloads">下载量</SelectItem>
+                    <SelectItem value="name">名称</SelectItem>
+                    <SelectItem value="updated">最近更新</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             )}
         </div>
@@ -944,6 +935,7 @@ const App: React.FC = () => {
                      </SelectTrigger>
                      <SelectContent>
                        <SelectItem value="default">默认</SelectItem>
+                       <SelectItem value="alpha">首字母 A-Z</SelectItem>
                        <SelectItem value="downloads">下载量</SelectItem>
                        <SelectItem value="name">名称</SelectItem>
                        <SelectItem value="updated">最近更新</SelectItem>
@@ -997,6 +989,31 @@ const App: React.FC = () => {
             </div>
           ) : loadStatus === 'loaded' ? (
             <>
+              {/* 分类筛选条（App Store 风格横排 pill，桌面端；移动端在顶部 header） */}
+              <div className="hidden md:flex items-center gap-2 overflow-x-auto no-scrollbar mb-5">
+                <button
+                  onClick={() => setActiveCategory(null)}
+                  className={cn(
+                    "shrink-0 h-8 px-3.5 rounded-full text-[13px] font-medium whitespace-nowrap transition-colors",
+                    activeCategory === null ? "bg-primary text-primary-foreground" : "bg-muted/60 text-foreground hover:bg-muted"
+                  )}
+                >
+                  全部
+                </button>
+                {CATEGORIES.map(cat => (
+                  <button
+                    key={cat.key}
+                    onClick={() => setActiveCategory(cat.key)}
+                    className={cn(
+                      "shrink-0 h-8 px-3.5 rounded-full text-[13px] font-medium whitespace-nowrap transition-colors",
+                      activeCategory === cat.key ? "bg-primary text-primary-foreground" : "bg-muted/60 text-foreground hover:bg-muted"
+                    )}
+                  >
+                    {cat.label}
+                    <span className="ml-1 text-xs opacity-60 tabular-nums">{categoryCounts[cat.key] ?? 0}</span>
+                  </button>
+                ))}
+              </div>
               {(activeSourceFilter || activeAuthorFilter || activeDistributorFilter) && (
                 <div className="flex items-center gap-2 mb-4 flex-wrap">
                   <span className="text-xs text-muted-foreground">过滤：</span>
@@ -1051,6 +1068,8 @@ const App: React.FC = () => {
                    onSourceFilter={setActiveSourceFilter}
                    onAuthorFilter={setActiveAuthorFilter}
                    onDistributorFilter={setActiveDistributorFilter}
+                   onControl={handleControl}
+                   controlling={controlling}
                 />
               </div>
               <div className="md:hidden">
@@ -1068,6 +1087,8 @@ const App: React.FC = () => {
                   onSourceFilter={setActiveSourceFilter}
                   onAuthorFilter={setActiveAuthorFilter}
                   onDistributorFilter={setActiveDistributorFilter}
+                  onControl={handleControl}
+                  controlling={controlling}
                 />
               </div>
             </>

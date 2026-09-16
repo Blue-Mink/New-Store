@@ -1,13 +1,17 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"fnos-store/internal/core"
 )
 
 func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
-	fetchErr := s.refreshRegistry(r.Context())
+	// 刷新是服务端工作：客户端断开（刷新页面/SSE 断开）不能取消进行中的
+	// 目录抓取，否则所有外部源会以 "context canceled" 失败、注册表丢失
+	// 外部目录，直到下一次定时刷新才能恢复。
+	fetchErr := s.refreshRegistry(context.WithoutCancel(r.Context()))
 
 	apps := s.listRegistryApps()
 	if fetchErr != nil && len(apps) == 0 {

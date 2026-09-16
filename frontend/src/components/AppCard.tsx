@@ -18,6 +18,9 @@ import {
   BellOff,
   Trash2,
   Tag,
+  Play,
+  Square,
+  Loader2,
 } from 'lucide-react';
 
 interface AppCardProps {
@@ -36,9 +39,13 @@ interface AppCardProps {
   onAuthorFilter?: (author: string) => void;
   /** 点击发布者 → 只看该发布者发布的应用 */
   onDistributorFilter?: (distributor: string) => void;
+  /** 已安装应用启动/停用（与 fnOS 应用中心同步） */
+  onControl?: (app: AppInfo, action: 'start' | 'stop') => void;
+  /** 正在执行启停操作的应用名（显示转圈） */
+  controlling?: string | null;
 }
 
-const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, upgradeAllowed = true, onSourceFilter, onAuthorFilter, onDistributorFilter }) => {
+const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, upgradeAllowed = true, onSourceFilter, onAuthorFilter, onDistributorFilter, onControl, controlling }) => {
   const isInstalled = app.installed;
   const canUpdate = isInstalled && app.has_update;
 
@@ -235,12 +242,31 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
             </div>
 
             <div className="flex items-center gap-1.5">
+              {isInstalled && onControl && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onControl(app, app.status === 'running' ? 'stop' : 'start')}
+                  disabled={!!operation || controlling !== null}
+                  aria-label={`${app.status === 'running' ? '停用' : '启动'} ${app.display_name}`}
+                  title={app.status === 'running' ? '停用' : '启动'}
+                  className="rounded-full h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                >
+                  {controlling === app.appname ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : app.status === 'running' ? (
+                    <Square className="h-3.5 w-3.5 fill-current" />
+                  ) : (
+                    <Play className="h-3.5 w-3.5 fill-current" />
+                  )}
+                </Button>
+              )}
               {isInstalled && onUninstall && (
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={() => onUninstall(app)}
-                  disabled={!!operation}
+                  disabled={!!operation || controlling !== null}
                   aria-label={`卸载 ${app.display_name}`}
                   title="卸载"
                   className="rounded-full h-8 w-8 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"

@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -242,7 +244,51 @@ func iconCandidates(appName, sourceBase string) []string {
 
 // resolveAppIcon 返回应用图标字节：优先应用声明的 icon_url，
 // 为空则按源仓库布局探测候选路径（整体 25 秒预算）。
+// localAppIcon 读取应用中心程序目录里的本地图标
+// （/vol1/@appcenter/<app>/ui/images/，兼容 icon-256.png / icon_0_256.png 等命名）。
+func (s *Server) localAppIcon(appName string) ([]byte, string, bool) {
+	if s.appCenterDir == "" {
+		return nil, "", false
+	}
+	dir := filepath.Join(s.appCenterDir, appName, "ui", "images")
+	for _, f := range []string{
+		"icon-256.png", "icon_256.png", "icon_0_256.png", "icon_256.PNG",
+		"icon.png", "icon_0.png", "icon-64.png", "icon_64.png",
+	} {
+		b, err := os.ReadFile(filepath.Join(dir, f))
+		if err != nil || len(b) < 64 {
+			continue
+		}
+		if looksLikeImage(b) {
+			return b, assetContentTypeFor(f), true
+		}
+	}
+	return nil, "", false
+}
+
+func looksLikeImage(b []byte) bool {
+	if len(b) >= 8 {
+		if b[0] == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G' {
+			return true
+		}
+		if b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F' &&
+			b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P' {
+			return true
+		}
+		if b[0] == 'G' && b[1] == 'I' && b[2] == 'F' && b[3] == '8' {
+			return true
+		}
+	}
+	return len(b) >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF
+}
+
 func (s *Server) resolveAppIcon(ctx context.Context, app core.AppInfo) ([]byte, string, error) {
+	// 「fnOS应用中心」来源应用：直接读应用中心本地图标（最可靠）
+	if app.Source == "fnOS应用中心" {
+		if body, ct, ok := s.localAppIcon(app.AppName); ok {
+			return body, ct, nil
+		}
+	}
 	cacheKey := app.AppKey() + "/icon/"
 	if app.IconURL != "" {
 		target := normalizeGitHubURL(strings.TrimSpace(app.IconURL))
