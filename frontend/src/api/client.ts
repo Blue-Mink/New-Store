@@ -23,7 +23,15 @@ export interface AppInfo {
   platform: string;
   release_url: string;
   release_notes: string;
+  /**
+   * 应用中心 daemon 上报的运行状态：running / stopped / starting / stopping /
+   * nostart（系统组件，无独立启停）等。未安装应用为空。
+   */
   status: string;
+  /** daemon 能力位：是否支持启动/停用（nostart 系统组件为 false）。缺省按支持处理。 */
+  start_stop?: boolean;
+  /** daemon 能力位：是否可卸载。缺省按可卸载处理。 */
+  uninstallable?: boolean;
   service_port?: number;
   homepage?: string;
   icon_url?: string;

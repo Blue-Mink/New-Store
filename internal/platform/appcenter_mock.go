@@ -54,6 +54,10 @@ func (m *MockAppCenter) List() ([]InstalledApp, error) {
 			Version: fields[1],
 			Status:  fields[2],
 		}
+		if app.Status != "nostart" {
+			// Permissive defaults, same as the Linux CLI fallback.
+			app.Control = AppControl{IsOpen: true, IsStartStop: true, IsUninstall: true}
+		}
 		apps = append(apps, app)
 	}
 	return apps, nil
@@ -94,6 +98,16 @@ func (m *MockAppCenter) Start(appname string) error {
 func (m *MockAppCenter) Stop(appname string) error {
 	_, err := m.run("stop", appname)
 	return err
+}
+
+// The mock has no daemon task channel; the confirmed variants reuse the CLI
+// mock, whose synchronous completion stands in for the task poll.
+func (m *MockAppCenter) StartConfirmed(_ context.Context, appname string) error {
+	return m.Start(appname)
+}
+
+func (m *MockAppCenter) StopConfirmed(_ context.Context, appname string) error {
+	return m.Stop(appname)
 }
 
 func (m *MockAppCenter) DefaultVolume() (int, error) {

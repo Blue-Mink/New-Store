@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { LayoutGrid, CheckCircle2, RefreshCw, Settings, MessageCircle, ChevronsLeft, ChevronsRight, Search, X, Film, ArrowDownToLine, BookOpen, Wrench, Globe, ArrowUpDown, ArrowLeft, Loader2, CircleX, CircleCheck, WifiOff, ExternalLink, Package, Compass, Brain, Clapperboard, Network } from 'lucide-react';
+import { LayoutGrid, CheckCircle2, RefreshCw, Settings, MessageCircle, ChevronsLeft, ChevronsRight, Search, X, Film, ArrowDownToLine, BookOpen, Wrench, Globe, ArrowLeft, Loader2, CircleX, CircleCheck, WifiOff, ExternalLink, Package, Compass, Brain, Clapperboard, Network, ChevronsUpDown, Check } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Badge } from './components/ui/badge';
@@ -28,13 +28,6 @@ import {
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -59,6 +52,14 @@ const CATEGORIES = [
 type CategoryKey = typeof CATEGORIES[number]['key'];
 
 type SortKey = 'default' | 'downloads' | 'name' | 'alpha' | 'updated';
+
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: 'default', label: '默认' },
+  { value: 'alpha', label: '首字母 A-Z' },
+  { value: 'downloads', label: '下载量' },
+  { value: 'name', label: '名称' },
+  { value: 'updated', label: '最近更新' },
+];
 
 const App: React.FC = () => {
   const [apps, setApps] = useState<AppInfo[]>([]);
@@ -114,6 +115,7 @@ const App: React.FC = () => {
   const [detailApp, setDetailApp] = useState<AppInfo | null>(null);
   const [successInfo, setSuccessInfo] = useState<{app: AppInfo; operation: 'install' | 'update'} | null>(null);
   const [sortBy, setSortBy] = useState<SortKey>('default');
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
     localStorage.getItem('sidebar-collapsed') === 'true'
   );
@@ -628,6 +630,50 @@ const App: React.FC = () => {
     return acc;
   }, {} as Record<string, number>);
 
+  // 「全部」复合 pill：pill 主体 = 选择全部分类；右侧 ▾ = 排序菜单（折叠在全部里）
+  const allCategoryPill = (
+    // z-50：菜单打开时固定覆盖层（z-40）挡住页面其余部分，但 pill 本体要
+    // 保持在覆盖层之上，用户才能再点 pill/▾ 收起菜单。
+    <div className="relative z-50 shrink-0">
+      <button
+        onClick={() => setActiveCategory(null)}
+        className={cn(
+          "relative z-[60] flex items-center gap-0.5 shrink-0 h-8 pl-3.5 pr-1.5 rounded-full text-[13px] font-medium whitespace-nowrap",
+          activeCategory === null ? "bg-primary text-primary-foreground" : "bg-muted/60 text-foreground"
+        )}
+      >
+        全部
+        <span
+          role="button"
+          aria-label="排序"
+          title="排序"
+          onClick={(e) => { e.stopPropagation(); setSortMenuOpen(v => !v); }}
+          className={cn("flex items-center justify-center h-6 w-6 rounded-full transition-colors", sortMenuOpen && "bg-black/10")}
+        >
+          <ChevronsUpDown className="h-3.5 w-3.5" />
+        </span>
+      </button>
+      {sortMenuOpen && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setSortMenuOpen(false)} />
+          <div className="absolute left-0 top-9 z-50 w-40 rounded-xl border border-border bg-popover p-1 shadow-lg">
+            <p className="px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground">排序</p>
+            {SORT_OPTIONS.map(o => (
+              <button
+                key={o.value}
+                onClick={() => { setSortBy(o.value); setSortMenuOpen(false); }}
+                className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-[13px] hover:bg-muted"
+              >
+                {o.label}
+                {sortBy === o.value && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row">
       <aside className={cn(
@@ -847,15 +893,7 @@ const App: React.FC = () => {
             )}
             {activeFilter !== 'recommended' && (
               <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1">
-                <button
-                  onClick={() => setActiveCategory(null)}
-                  className={cn(
-                    "shrink-0 h-8 px-3.5 rounded-full text-[13px] font-medium whitespace-nowrap",
-                    activeCategory === null ? "bg-primary text-primary-foreground" : "bg-muted/60 text-foreground"
-                  )}
-                >
-                  全部
-                </button>
+                {allCategoryPill}
                 {CATEGORIES.map(cat => (
                   <button
                     key={cat.key}
@@ -868,19 +906,6 @@ const App: React.FC = () => {
                     {cat.label}
                   </button>
                 ))}
-                <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
-                  <SelectTrigger className="shrink-0 h-8 w-[110px] rounded-full border-0 bg-muted/60 shadow-none text-[13px]">
-                    <ArrowUpDown className="h-3 w-3 mr-1" />
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">默认</SelectItem>
-                    <SelectItem value="alpha">首字母 A-Z</SelectItem>
-                    <SelectItem value="downloads">下载量</SelectItem>
-                    <SelectItem value="name">名称</SelectItem>
-                    <SelectItem value="updated">最近更新</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
             )}
         </div>
@@ -928,19 +953,6 @@ const App: React.FC = () => {
                        </button>
                      )}
                    </div>
-                   <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
-                     <SelectTrigger className="w-32 h-9 shadow-none rounded-full border-0 bg-muted/60">
-                       <ArrowUpDown className="h-3.5 w-3.5 mr-1.5" />
-                       <SelectValue />
-                     </SelectTrigger>
-                     <SelectContent>
-                       <SelectItem value="default">默认</SelectItem>
-                       <SelectItem value="alpha">首字母 A-Z</SelectItem>
-                       <SelectItem value="downloads">下载量</SelectItem>
-                       <SelectItem value="name">名称</SelectItem>
-                       <SelectItem value="updated">最近更新</SelectItem>
-                     </SelectContent>
-                   </Select>
                  </>
                )}
                <ThemeToggle />
@@ -991,15 +1003,7 @@ const App: React.FC = () => {
             <>
               {/* 分类筛选条（App Store 风格横排 pill，桌面端；移动端在顶部 header） */}
               <div className="hidden md:flex items-center gap-2 overflow-x-auto no-scrollbar mb-5">
-                <button
-                  onClick={() => setActiveCategory(null)}
-                  className={cn(
-                    "shrink-0 h-8 px-3.5 rounded-full text-[13px] font-medium whitespace-nowrap transition-colors",
-                    activeCategory === null ? "bg-primary text-primary-foreground" : "bg-muted/60 text-foreground hover:bg-muted"
-                  )}
-                >
-                  全部
-                </button>
+                {allCategoryPill}
                 {CATEGORIES.map(cat => (
                   <button
                     key={cat.key}

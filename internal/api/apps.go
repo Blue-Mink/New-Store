@@ -46,6 +46,15 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 			availableVersion = app.FpkVersion
 		}
 
+		// daemon 能力位（未知时保持 nil，前端按宽松默认处理，兼容 CLI 回退场景）
+		var startStop, uninstallable *bool
+		if app.Installed {
+			if ctrl, known := s.getRuntimeControl(app.AppName); known {
+				sv, uv := ctrl.IsStartStop, ctrl.IsUninstall
+				startStop, uninstallable = &sv, &uv
+			}
+		}
+
 		respApps = append(respApps, appResponse{
 			Key:                 app.AppKey(),
 			AppName:             app.AppName,
@@ -62,6 +71,8 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 			ReleaseURL:          releaseURL,
 			ReleaseNotes:        "",
 			Status:              status,
+			StartStop:           startStop,
+			Uninstallable:       uninstallable,
 			ServicePort:         app.ServicePort,
 			Homepage:            app.HomepageURL,
 			IconURL:             app.IconURL,
@@ -83,6 +94,11 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// 同名应用（内置目录与多个外部源重复收录）折叠为一张卡：
+	// 后端操作全部按裸 appname 走，注册表 Get() 的解析顺序是内置目录优先；
+	// 重复卡片会让「已安装」计数虚高（同一应用被多个源各标记一次 installed）。
+	respApps = dedupeAppsByAppName(respApps)
+
 	upgradeCap := s.ac.UpgradeCapability()
 	writeJSON(w, http.StatusOK, appsListResponse{
 		UpgradeAllowed:       upgradeCap.Allowed,
@@ -90,6 +106,42 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 		Apps:                 respApps,
 		LastCheck:            formatTimestamp(s.getLastCheck()),
 	})
+}
+
+// sourceRank 给出同名应用折叠时的来源优先级，与 Registry.Get 的解析顺序
+// 一致：内置目录 > 应用中心本地条目 > 任意外部源。
+func sourceRank(source string) int {
+	switch source {
+	case "fnos-apps":
+		return 0
+	case "fnOS应用中心":
+		return 1
+	default:
+		return 2
+	}
+}
+
+// dedupeAppsByAppName 把同一 appname 的多条目录条目折叠为一张卡，保留在列表
+// 中的原位置。保留规则：已安装条目优先于未安装条目；安装状态相同时来源等级
+// 更高者（sourceRank 更小）胜出。其余字段各源基本一致，不引入版本比较，
+// 避免把目录去重变成版本仲裁。
+func dedupeAppsByAppName(apps []appResponse) []appResponse {
+	pos := make(map[string]int, len(apps))
+	kept := make([]appResponse, 0, len(apps))
+	for _, a := range apps {
+		idx, seen := pos[a.AppName]
+		if !seen {
+			pos[a.AppName] = len(kept)
+			kept = append(kept, a)
+			continue
+		}
+		cur := kept[idx]
+		if (a.Installed && !cur.Installed) ||
+			(a.Installed == cur.Installed && sourceRank(a.Source) < sourceRank(cur.Source)) {
+			kept[idx] = a
+		}
+	}
+	return kept
 }
 
 func (s *Server) handleIgnoreUpdate(w http.ResponseWriter, r *http.Request) {

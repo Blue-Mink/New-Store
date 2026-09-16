@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -49,6 +50,11 @@ const (
 	routeInstallTask    = "/rpc/v1/install/task"
 	routeUninstallTask  = "/rpc/v1/uninstall/task"
 	routeCommonStatus   = "/rpc/v1/common/status"
+	routeAppInstalled   = "/rpc/v1/app/installed"
+	routeStartCheck     = "/rpc/v1/start/check"
+	routeStartTask      = "/rpc/v1/start/task"
+	routeStopCheck      = "/rpc/v1/stop/check"
+	routeStopTask       = "/rpc/v1/stop/task"
 )
 
 // Daemon status codes observed on the staging/task polls.
@@ -89,15 +95,31 @@ func newDaemonClient(timeout time.Duration) *http.Client {
 // error code in the body, so ignoring it would repeat the exact mistake that
 // made appcenter-cli's exit status meaningless.
 func daemonCall(ctx context.Context, path string, body any, out any) error {
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("encode %s request: %w", path, err)
+	return daemonCallMethod(ctx, http.MethodPost, path, body, out)
+}
+
+// daemonCallGet queries a GET-only route (the daemon serves /rpc/v1/app/
+// installed as GET; POSTing to it answers a plain 404).
+func daemonCallGet(ctx context.Context, path string, out any) error {
+	return daemonCallMethod(ctx, http.MethodGet, path, nil, out)
+}
+
+func daemonCallMethod(ctx context.Context, method, path string, body any, out any) error {
+	var reader io.Reader
+	if method == http.MethodPost {
+		payload, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encode %s request: %w", path, err)
+		}
+		reader = bytes.NewReader(payload)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://localhost"+path, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, method, "http://localhost"+path, reader)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	var connected bool
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
@@ -411,18 +433,24 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// waitTask polls a daemon task to completion.
+// waitTask polls a daemon task to completion with the default (install/
+// upgrade/uninstall) budget.
+func (a *LinuxAppCenter) waitTask(ctx context.Context, taskID, what string) error {
+	return a.waitTaskBudget(ctx, taskID, what, 15*time.Minute)
+}
+
+// waitTaskBudget polls a daemon task to completion within budget.
 //
 // It deliberately distinguishes three outcomes: success, definite failure, and
 // ErrTaskOutcomeUnknown. Losing sight of a task is NOT the same as the task
 // failing — the daemon keeps working after we stop watching — and conflating
 // them is what turns a completed upgrade into a user-visible error plus a
 // retry that mutates the same app a second time.
-func (a *LinuxAppCenter) waitTask(ctx context.Context, taskID, what string) error {
+func (a *LinuxAppCenter) waitTaskBudget(ctx context.Context, taskID, what string, budget time.Duration) error {
 	if taskID == "" {
 		return fmt.Errorf("%s失败: app center 未返回任务 ID", what)
 	}
-	deadline := time.Now().Add(15 * time.Minute)
+	deadline := time.Now().Add(budget)
 	var outageStart time.Time
 	for time.Now().Before(deadline) {
 		var st taskStatus
@@ -468,7 +496,7 @@ func (a *LinuxAppCenter) waitTask(ctx context.Context, taskID, what string) erro
 			return fmt.Errorf("%w: %s过程中断开了与 app center 的连接", ErrTaskOutcomeUnknown, what)
 		}
 	}
-	return fmt.Errorf("%w: %s超过 15 分钟仍未结束", ErrTaskOutcomeUnknown, what)
+	return fmt.Errorf("%w: %s超过 %s 仍未结束（任务可能仍在进行，稍后在应用中心查看状态）", ErrTaskOutcomeUnknown, what, budget)
 }
 
 // removeStagedPackage deletes the daemon's unpacked copy of a package.
@@ -642,4 +670,126 @@ func (a *LinuxAppCenter) InstallFpkWithWizard(ctx context.Context, fpkPath strin
 	}
 	removeStagedPackage(staged.Path)
 	return nil
+}
+
+// daemonApp is the installed-app record the app-center daemon reports.
+type daemonApp struct {
+	AppName string `json:"appName"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Source  string `json:"source"`
+	Status  string `json:"status"`
+	Icon    string `json:"icon"`
+	Control struct {
+		IsOpen      bool `json:"isOpen"`
+		IsStartStop bool `json:"isStartStop"`
+		IsUninstall bool `json:"isUninstall"`
+		Upgrade     bool `json:"upgrade"`
+	} `json:"control"`
+}
+
+// DaemonListInstalled asks the app-center daemon for its authoritative list of
+// installed apps: exact status (including the transient "starting" /
+// "stopping" states and the "nostart" system components) plus the per-app
+// capability bits the native App Center uses to decide which actions to offer.
+//
+// This is the source the web UI reads; `appcenter-cli list` (a parsed text
+// table) is only a fallback when the daemon socket is unavailable.
+func (a *LinuxAppCenter) DaemonListInstalled(ctx context.Context) ([]InstalledApp, error) {
+	var resp struct {
+		Total int         `json:"total"`
+		List  []daemonApp `json:"list"`
+	}
+	if err := daemonCallGet(ctx, routeAppInstalled, &resp); err != nil {
+		return nil, err
+	}
+	apps := make([]InstalledApp, 0, len(resp.List))
+	for _, d := range resp.List {
+		apps = append(apps, InstalledApp{
+			AppName:     d.AppName,
+			DisplayName: d.Name,
+			Version:     d.Version,
+			Status:      d.Status,
+			Source:      d.Source,
+			Icon:        d.Icon,
+			Control: AppControl{
+				IsOpen:      d.Control.IsOpen,
+				IsStartStop: d.Control.IsStartStop,
+				IsUninstall: d.Control.IsUninstall,
+				Upgrade:     d.Control.Upgrade,
+			},
+		})
+	}
+	return apps, nil
+}
+
+// controlTask is the daemon's acknowledgement for a start/stop submission.
+type controlTask struct {
+	TaskID string `json:"taskId"`
+}
+
+// StartConfirmed is the daemon-backed start: start/check → start/task → poll.
+// The native App Center offers no fire-and-forget start either; confirming the
+// task is what lets the store report a real failure instead of a silent no-op.
+func (a *LinuxAppCenter) StartConfirmed(ctx context.Context, appname string) error {
+	var chk struct {
+		IsSystemVersionMatch bool `json:"isSystemVersionMatch"`
+	}
+	if err := daemonCall(ctx, routeStartCheck, map[string]any{"appName": appname}, &chk); err != nil {
+		if errors.Is(err, ErrDaemonUnreachable) {
+			// The request provably never reached the daemon; the CLI (which
+			// talks to the same daemon) is the only remaining channel.
+			_, cliErr := a.run("start", appname)
+			return cliErr
+		}
+		return fmt.Errorf("启动前校验失败: %w", err)
+	}
+	if !chk.IsSystemVersionMatch {
+		return fmt.Errorf("系统版本不满足 %s 的运行要求，无法启动", appname)
+	}
+	return a.submitControlTask(ctx, routeStartTask, "start", appname, "启动")
+}
+
+// StopConfirmed is the daemon-backed stop: stop/check → stop/task → poll.
+// The check also surfaces "another app depends on this one", which the CLI
+// path could not express.
+func (a *LinuxAppCenter) StopConfirmed(ctx context.Context, appname string) error {
+	var chk struct {
+		IsSystemVersionMatch bool `json:"isSystemVersionMatch"`
+		DependentApps        struct {
+			IsDependency bool `json:"isDependency"`
+		} `json:"dependentApps"`
+	}
+	if err := daemonCall(ctx, routeStopCheck, map[string]any{"appName": appname}, &chk); err != nil {
+		if errors.Is(err, ErrDaemonUnreachable) {
+			_, cliErr := a.run("stop", appname)
+			return cliErr
+		}
+		return fmt.Errorf("停用前校验失败: %w", err)
+	}
+	if !chk.IsSystemVersionMatch {
+		return fmt.Errorf("系统版本不满足 %s 的停用要求，无法停用", appname)
+	}
+	if chk.DependentApps.IsDependency {
+		return fmt.Errorf("其他应用依赖 %s，应用中心拒绝停用", appname)
+	}
+	return a.submitControlTask(ctx, routeStopTask, "stop", appname, "停用")
+}
+
+// submitControlTask submits a start/stop task and polls it to completion.
+// CLI is used only as a last resort when the daemon socket is UNREACHABLE; a
+// business refusal (wrong state, dependency) is final and never retried.
+func (a *LinuxAppCenter) submitControlTask(ctx context.Context, route, cliVerb, appname, what string) error {
+	var task controlTask
+	err := daemonCall(ctx, route, map[string]any{"appName": appname}, &task)
+	if err != nil {
+		if errors.Is(err, ErrDaemonUnreachable) {
+			_, cliErr := a.run(cliVerb, appname)
+			return cliErr
+		}
+		return fmt.Errorf("%s失败: %w", what, err)
+	}
+	// Start/stop settles in seconds; 5 minutes is far beyond any healthy case
+	// while still bounding how long one app can hold the operation queue.
+	return a.waitTaskBudget(ctx, task.TaskID, what, 5*time.Minute)
 }

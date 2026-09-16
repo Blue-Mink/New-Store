@@ -125,13 +125,16 @@ func (s *Server) refreshRuntimeStatus() {
 
 	status := make(map[string]string, len(apps))
 	versions := make(map[string]string, len(apps))
+	control := make(map[string]platform.AppControl, len(apps))
 	for _, app := range apps {
 		status[app.AppName] = app.Status
 		versions[app.AppName] = app.Version
+		control[app.AppName] = app.Control
 	}
 
 	s.mu.Lock()
 	s.statusByApp = status
+	s.controlByApp = control
 	// The daemon list is the authority on whether an app exists; fold it in
 	// so apps whose /var/apps manifest the scan missed still show as
 	// installed instead of dead-ending on install (#280/#281).
@@ -195,6 +198,16 @@ func (s *Server) getRuntimeStatus(name string) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.statusByApp[name]
+}
+
+// getRuntimeControl returns the daemon's per-app capability bits for name.
+// found is false when the daemon list has no entry (e.g. CLI fallback) and
+// callers must treat the result as "capabilities unknown".
+func (s *Server) getRuntimeControl(name string) (platform.AppControl, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	c, ok := s.controlByApp[name]
+	return c, ok
 }
 
 func (s *Server) getLastCheck() time.Time {

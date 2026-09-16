@@ -111,6 +111,11 @@ func (s *stubAppCenter) Start(string) error {
 	return s.startErr
 }
 func (s *stubAppCenter) Stop(string) error { return nil }
+func (s *stubAppCenter) StartConfirmed(context.Context, string) error {
+	atomic.AddInt32(&s.nStart, 1)
+	return s.startErr
+}
+func (s *stubAppCenter) StopConfirmed(context.Context, string) error { return nil }
 func (s *stubAppCenter) DefaultVolume() (int, error) {
 	if s.getVolErr != nil {
 		return 0, s.getVolErr

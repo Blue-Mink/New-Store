@@ -24,7 +24,14 @@ type appResponse struct {
 	Platform            string `json:"platform"`
 	ReleaseURL          string `json:"release_url"`
 	ReleaseNotes        string `json:"release_notes"`
-	Status              string `json:"status"`
+	// Status is the app-center daemon vocabulary: running / stopped / starting /
+	// stopping / nostart (system components). Empty when not installed.
+	Status string `json:"status"`
+	// StartStop / Uninstallable mirror the daemon's per-app capability bits.
+	// Omitted (nil) when the capability is unknown (CLI fallback), in which
+	// case the UI must default to permissive — same as before these fields.
+	StartStop     *bool `json:"start_stop,omitempty"`
+	Uninstallable *bool `json:"uninstallable,omitempty"`
 	ServicePort         int    `json:"service_port,omitempty"`
 	Homepage            string `json:"homepage,omitempty"`
 	IconURL             string `json:"icon_url,omitempty"`

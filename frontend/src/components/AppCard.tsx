@@ -48,11 +48,16 @@ interface AppCardProps {
 const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, upgradeAllowed = true, onSourceFilter, onAuthorFilter, onDistributorFilter, onControl, controlling }) => {
   const isInstalled = app.installed;
   const canUpdate = isInstalled && app.has_update;
+  // daemon 能力位：nostart 系统组件（nodejs/java 等）与不支持启停的应用不显示启停按钮
+  const canControl = isInstalled && !!onControl && (app.start_stop ?? true) && app.status !== 'nostart';
+  const controlBusy = app.status === 'starting' || app.status === 'stopping';
 
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'running': return 'text-emerald-500 fill-emerald-500';
       case 'stopped': return 'text-amber-500 fill-amber-500';
+      case 'starting': return 'text-primary animate-pulse';
+      case 'stopping': return 'text-amber-500 animate-pulse';
       case 'installing': return 'text-primary animate-pulse';
       case 'uninstalling': return 'text-destructive animate-pulse';
       case 'updating': return 'text-primary animate-pulse';
@@ -64,9 +69,12 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
     switch (status) {
       case 'running': return '运行中';
       case 'stopped': return '已停止';
+      case 'starting': return '启动中';
+      case 'stopping': return '停用中';
       case 'installing': return '安装中';
       case 'uninstalling': return '卸载中';
       case 'updating': return '更新中';
+      case 'nostart': return '系统组件';
       default: return status || '未知';
     }
   };
@@ -242,17 +250,17 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
             </div>
 
             <div className="flex items-center gap-1.5">
-              {isInstalled && onControl && (
+              {canControl && (
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={() => onControl(app, app.status === 'running' ? 'stop' : 'start')}
-                  disabled={!!operation || controlling !== null}
-                  aria-label={`${app.status === 'running' ? '停用' : '启动'} ${app.display_name}`}
-                  title={app.status === 'running' ? '停用' : '启动'}
+                  disabled={!!operation || controlling !== null || controlBusy}
+                  aria-label={controlBusy ? `${app.status === 'starting' ? '启动中' : '停用中'} ${app.display_name}` : `${app.status === 'running' ? '停用' : '启动'} ${app.display_name}`}
+                  title={controlBusy ? (app.status === 'starting' ? '启动中…' : '停用中…') : app.status === 'running' ? '停用' : '启动'}
                   className="rounded-full h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
                 >
-                  {controlling === app.appname ? (
+                  {controlling === app.appname || controlBusy ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : app.status === 'running' ? (
                     <Square className="h-3.5 w-3.5 fill-current" />
@@ -261,7 +269,7 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
                   )}
                 </Button>
               )}
-              {isInstalled && onUninstall && (
+              {isInstalled && onUninstall && (app.uninstallable ?? true) && (
                 <Button
                   size="sm"
                   variant="ghost"

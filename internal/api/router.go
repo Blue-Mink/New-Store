@@ -36,6 +36,7 @@ type Server struct {
 	staticFS          fs.FS
 	lastCheck         time.Time
 	statusByApp       map[string]string
+	controlByApp      map[string]platform.AppControl
 	recommendedApps   []source.RecommendedApp
 	// customSources 是用户添加的 FnDepot 外部应用源；sourceStatus 记录
 	// 每个源最近一次抓取的应用数与错误（按源 ID 索引）。
@@ -95,6 +96,7 @@ func NewServer(cfg Config) *Server {
 		storeApp:         cfg.StoreApp,
 		staticFS:         cfg.StaticFS,
 		statusByApp:      make(map[string]string),
+		controlByApp:     make(map[string]platform.AppControl),
 		refreshDebouncer: &refreshDebouncer{},
 		sourceStatus:     make(map[string]sourceStatusInfo),
 	}

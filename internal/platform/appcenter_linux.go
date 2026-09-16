@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 type LinuxAppCenter struct {
@@ -46,12 +47,37 @@ func (a *LinuxAppCenter) run(args ...string) (string, error) {
 	return text, nil
 }
 
+// List returns the installed apps, preferring the app-center daemon:
+// it is authoritative (it is what the native App Center reads), reports the
+// full status vocabulary (starting/stopping/nostart, not just running/stopped)
+// and carries the per-app capability bits. The CLI table parse is a fallback
+// for the case the daemon socket is absent (very old builds / during updates).
 func (a *LinuxAppCenter) List() ([]InstalledApp, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if apps, err := a.DaemonListInstalled(ctx); err == nil {
+		return apps, nil
+	}
 	out, err := a.run("list")
 	if err != nil {
 		return nil, err
 	}
-	return parseListTable(out)
+	apps, err := parseListTable(out)
+	if err != nil {
+		return nil, err
+	}
+	// The CLI table has no capability column. Fill PERMISSIVE defaults:
+	// zero-value AppControl would be read as "not startable / not
+	// uninstallable" and hide every control button on builds that fall back
+	// to the CLI. The pre-daemon UI showed the buttons everywhere except
+	// nostart components, which is exactly what this encodes.
+	for i := range apps {
+		if apps[i].Status == "nostart" {
+			continue
+		}
+		apps[i].Control = AppControl{IsOpen: true, IsStartStop: true, IsUninstall: true}
+	}
+	return apps, nil
 }
 
 func (a *LinuxAppCenter) Check(appname string) (bool, error) {

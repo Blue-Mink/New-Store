@@ -2,12 +2,30 @@ package platform
 
 import "context"
 
-// InstalledApp represents an app installed via appcenter-cli.
+// AppControl carries the per-app operation capability bits the app-center
+// daemon reports. A zero value means "capabilities unknown" (e.g. the CLI
+// fallback has no such data), and callers MUST treat zero as permissive for
+// StartStop/Uninstall to preserve pre-daemon behavior.
+type AppControl struct {
+	IsOpen      bool // app exposes an openable UI entry
+	IsStartStop bool // supports start/stop
+	IsUninstall bool // supports uninstall
+	Upgrade     bool // supports in-place upgrade
+}
+
+// InstalledApp represents an app installed on this box, as reported by the
+// app-center daemon (preferred) or appcenter-cli (fallback).
 type InstalledApp struct {
 	AppName     string
 	Version     string
 	DisplayName string
-	Status      string // "running" or "stopped"
+	// Status is the daemon vocabulary: "running" / "stopped" / "starting" /
+	// "stopping" / "nostart" (system components with no start/stop of their
+	// own, e.g. nodejs / java runtime packages).
+	Status  string
+	Source  string // "official" / "thirdparty"
+	Icon    string // daemon icon path, e.g. /app-center-static/icon/<app>/icon.png
+	Control AppControl
 }
 
 // VolumeInfo represents an available installation volume.
@@ -48,6 +66,19 @@ type AppCenter interface {
 
 	// Stop stops a running app.
 	Stop(appname string) error
+
+	// StartConfirmed starts an app through the app-center daemon's task
+	// channel: pre-flight check, task submission, then poll to completion —
+	// the same flow the native App Center web UI uses, so the result is
+	// CONFIRMED instead of fire-and-forget. Falls back to the CLI only when
+	// the daemon socket is unreachable.
+	StartConfirmed(ctx context.Context, appname string) error
+
+	// StopConfirmed stops a running app through the daemon's task channel
+	// (stop/check → stop/task → poll). The daemon refuses to stop an app
+	// other apps depend on, which the fire-and-forget CLI path could not
+	// report.
+	StopConfirmed(ctx context.Context, appname string) error
 
 	// DefaultVolume returns the default installation volume index.
 	DefaultVolume() (int, error)

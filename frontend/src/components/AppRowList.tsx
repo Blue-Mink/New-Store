@@ -32,13 +32,19 @@ interface AppRowListProps {
 const STATUS_TEXT: Record<string, string> = {
   running: '运行中',
   stopped: '已停止',
+  starting: '启动中',
+  stopping: '停用中',
   installing: '安装中',
   uninstalling: '卸载中',
   updating: '更新中',
+  nostart: '系统组件',
 };
 
 const statusColor = (s: string) =>
-  s === 'running' ? 'text-emerald-500' : s === 'stopped' ? 'text-amber-500' : 'text-primary';
+  s === 'running' ? 'text-emerald-500'
+    : s === 'stopped' || s === 'stopping' ? 'text-amber-500'
+    : s === 'nostart' ? 'text-muted-foreground'
+    : 'text-primary';
 
 /**
  * 移动端 App Store 风格列表：
@@ -72,6 +78,9 @@ const AppRowList: React.FC<AppRowListProps> = ({
         const operation = appOperations?.get(app.appname);
         const isInstalled = app.installed;
         const canUpdate = isInstalled && app.has_update;
+        // daemon 能力位：nostart 系统组件与不支持启停的应用不显示启停按钮
+        const canControl = isInstalled && !!onControl && (app.start_stop ?? true) && app.status !== 'nostart';
+        const controlBusy = app.status === 'starting' || app.status === 'stopping';
         return (
           <div
             key={app.key || app.appname}
@@ -219,15 +228,15 @@ const AppRowList: React.FC<AppRowListProps> = ({
                     {upgradeAllowed ? '更新' : '需手动'}
                   </button>
                 ) : null}
-                {isInstalled && onControl && (
+                {canControl && (
                   <button
                     onClick={() => onControl(app, app.status === 'running' ? 'stop' : 'start')}
-                    aria-label={`${app.status === 'running' ? '停用' : '启动'} ${app.display_name}`}
-                    title={app.status === 'running' ? '停用' : '启动'}
-                    disabled={controlling !== null}
+                    aria-label={controlBusy ? `${app.status === 'starting' ? '启动中' : '停用中'} ${app.display_name}` : `${app.status === 'running' ? '停用' : '启动'} ${app.display_name}`}
+                    title={controlBusy ? (app.status === 'starting' ? '启动中…' : '停用中…') : app.status === 'running' ? '停用' : '启动'}
+                    disabled={controlling !== null || controlBusy}
                     className="p-1.5 rounded-full text-muted-foreground/60 hover:text-primary hover:bg-primary/10 disabled:opacity-50"
                   >
-                    {controlling === app.appname ? (
+                    {controlling === app.appname || controlBusy ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : app.status === 'running' ? (
                       <Square className="h-3.5 w-3.5 fill-current" />
@@ -236,7 +245,7 @@ const AppRowList: React.FC<AppRowListProps> = ({
                     )}
                   </button>
                 )}
-                {isInstalled && onUninstall && (
+                {isInstalled && onUninstall && (app.uninstallable ?? true) && (
                   <button
                     onClick={() => onUninstall(app)}
                     aria-label={`卸载 ${app.display_name}`}

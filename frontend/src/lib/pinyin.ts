@@ -10,22 +10,31 @@ export const PINYIN_INITIAL: Record<string, string> = {
 };
 
 /**
- * 应用名首字母（A-Z 排序用）：
- * - 字母优先：名字里第一个 ASCII 字母决定首字母（1Panel → P、MySQL8 → M）；
- * - 无字母的纯数字名按数字 0-9 排；
- * - 中文名取第一个汉字的拼音首字母（表未收录 → '#'，排末尾）。
+ * 应用名首字母（A-Z 排序用），按名字的「首个实质字符」判定：
+ * - 首字符是字母 → 该字母（MySQL8 → M、aic8800 → A）；
+ * - 首字符是数字 → 字母优先：其后第一个字母（1Panel → P、9router → R），
+ *   纯数字名按数字本身（115 → 1）；
+ * - 首字符是汉字 → 拼音首字母（网易云API → W、安装器 → A；未收录 → '#'，排末尾）；
+ * - 首字符是标点/空格 → 跳过，看下一个实质字符。
+ *
+ * 注意：不能全文找第一个字母——「网易云API」会被错排进 A 区，
+ * 正确归属是 W（网）。
  */
 export function alphaInitial(name: string): string {
   const s = (name || '').trim();
-  for (const ch of s) {
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
     if (ch >= 'A' && ch <= 'Z') return ch;
     if (ch >= 'a' && ch <= 'z') return ch.toUpperCase();
-  }
-  for (const ch of s) {
-    if (ch >= '0' && ch <= '9') return ch;
-  }
-  for (const ch of s) {
-    if (ch >= '\u4e00' && ch <= '\u9fff') return PINYIN_INITIAL[ch] || '#';
+    if (ch >= '0' && ch <= '9') {
+      const letter = s.slice(i + 1).match(/[A-Za-z]/);
+      return letter ? letter[0].toUpperCase() : ch;
+    }
+    const code = s.codePointAt(i) || 0;
+    if (code >= 0x4e00 && code <= 0x9fff) {
+      return PINYIN_INITIAL[ch] || '#';
+    }
+    // 其他字符（标点、下划线等）跳过，继续找下一个实质字符
   }
   return '#';
 }
