@@ -36,7 +36,7 @@ export interface AppInfo {
   /**
    * 已安装应用的可打开 Web 入口（daemon appServiceInfo，与应用中心"打开"同源）。
    * web_url 在 daemon 提供了 host 时为完整 URL；否则用 web_protocol/web_port/
-   * web_path 由前端按当前访问主机拼出（直达 :8011 或 Web UI 内嵌 iframe 均成立）。
+   * web_path 由前端按当前访问主机拼出（直达 :38011 或 Web UI 内嵌 iframe 均成立）。
    */
   web_protocol?: string;
   web_url?: string;
@@ -101,7 +101,7 @@ export const availableVersionLabel = (app: AppInfo): string =>
 /**
  * 已安装应用的"打开"目标 URL（等价于 fnOS 应用中心的"打开"按钮）。
  * daemon 通常不带 host（实测 host 恒为空），此时按当前访问 store 的主机拼接：
- * 用户从 http://<nas>:8011 直达，或在 fnOS Web UI 内嵌 iframe 使用，
+ * 用户从 http://<nas>:38011 直达，或在 fnOS Web UI 内嵌 iframe 使用，
  * 两种情况下 location.hostname 都是 NAS 主机，拼出的地址一致。
  * 无 Web 入口的应用返回 null（不渲染"打开"按钮）。
  */

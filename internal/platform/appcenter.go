@@ -20,7 +20,7 @@ type WebService struct {
 	Protocol string // "http" / "https" (daemon default: http)
 	Host     string // daemon value; EMPTY on measured boxes — the UI fills in
 	// the host the user reached the store on (window.location.hostname),
-	// which is correct both for direct :8011 access and for the iframe
+	// which is correct both for direct :38011 access and for the iframe
 	// embedded in the fnOS web UI (same host).
 	Port     string
 	Path     string // e.g. "/"

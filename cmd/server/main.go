@@ -22,7 +22,7 @@ import (
 const storeAppName = "fnos-apps-store"
 
 func main() {
-	addr := envOr("LISTEN_ADDR", ":8011")
+	addr := envOr("LISTEN_ADDR", ":38011")
 	projectRoot := envOr("PROJECT_ROOT", findProjectRoot())
 	appsDir := envOr("APPS_DIR", defaultAppsDir(projectRoot))
 	dataDir := envOr("DATA_DIR", defaultDataDir(projectRoot))

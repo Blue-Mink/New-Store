@@ -329,7 +329,7 @@ const App: React.FC = () => {
   // 打开已安装应用的 Web UI（与 fnOS 应用中心"打开"按钮同机制）：
   // 内嵌 fnOS Web UI（microApp 桥可用）时走壳窗口 openApp(serviceName)
   // 在壳内任务标签页打开 —— 原生应用中心同款行为；
-  // 独立打开 :8011（桥不可用）时降级为新浏览器标签打开应用 URL。
+  // 独立打开 :38011（桥不可用）时降级为新浏览器标签打开应用 URL。
   const handleOpenApp = useCallback(async (app: AppInfo) => {
     // App Store 风格单一"打开"按钮：应用未运行时先自动启动，轮询到 running 再打开。
     // 注意：应用停止时 daemon 不下发 web 字段（web_port/web_service_name 均为空），

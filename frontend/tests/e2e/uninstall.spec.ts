@@ -44,7 +44,7 @@ async function confirmUninstall(page: Page, displayName: string): Promise<void> 
   await alert.getByRole('button', { name: '确认卸载', exact: true }).click();
 }
 
-const API = 'http://localhost:8011';
+const API = 'http://localhost:38011';
 
 interface ApiApp {
   appname: string;

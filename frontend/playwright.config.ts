@@ -5,11 +5,11 @@ import { e2eMockApps, repoRoot } from './tests/e2e/fixture';
  * E2E harness for the fnos-store frontend.
  *
  * Two servers, started in this order-independent pair:
- *   1. `make dev` at the repo root — the Go backend on :8011. On macOS it uses
+ *   1. `make dev` at the repo root — the Go backend on :38011. On macOS it uses
  *      the mock appcenter (dev/mock-appcenter-cli.sh). APPS_DIR + MOCK_APPS_DIR
  *      redirect it to a disposable copy of dev/mock-apps so the destructive
  *      uninstall tests never touch the git-tracked fixture.
- *   2. `npm run dev` — Vite on :5173, which proxies /api to :8011.
+ *   2. `npm run dev` — Vite on :5173, which proxies /api to :38011.
  *
  * Tests target http://localhost:5173.
  *
@@ -39,7 +39,7 @@ export default defineConfig({
     {
       command: 'make dev',
       cwd: repoRoot,
-      url: 'http://localhost:8011/api/status',
+      url: 'http://localhost:38011/api/status',
       reuseExistingServer: false,
       timeout: 120_000,
       stdout: 'pipe',

@@ -6,7 +6,7 @@
             "desc": "New Store",
             "icon": "images/{0}.png",
             "type": "iframe",
-            "port": "8011",
+            "port": "38011",
             "protocol": "http",
             "url": "/",
             "allUsers": true

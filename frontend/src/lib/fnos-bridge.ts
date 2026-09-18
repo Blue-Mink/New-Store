@@ -211,7 +211,7 @@ export function isEmbeddedInFnOS(): boolean {
  *     `encodeURIComponent(undefined)` 出 "…/undefined" 污染子视图；
  *     {} 会被 CQ 识别为参数对象并 pop 掉，得到干净的单段 key。
  *
- * 返回 false 表示桥不可用（独立打开 :8011 等场景），调用方降级处理。
+ * 返回 false 表示桥不可用（独立打开 :38011 等场景），调用方降级处理。
  */
 export async function openAppInShell(serviceName: string): Promise<boolean> {
   const methods = await connectFnOSBridge();
@@ -242,7 +242,7 @@ export async function openAppInShell(serviceName: string): Promise<boolean> {
  * 的应用名，避免参数序列化差异）；若父端未暴露该方法或调用抛错，
  * 退回 `openCustomApp('trim.setting','application-settings',{params:{appName}})`。
  *
- * 返回 false 表示桥不可用（独立打开 :8011 等场景），调用方降级处理。
+ * 返回 false 表示桥不可用（独立打开 :38011 等场景），调用方降级处理。
  */
 export async function openAppSettings(appName: string): Promise<boolean> {
   const methods = await connectFnOSBridge();

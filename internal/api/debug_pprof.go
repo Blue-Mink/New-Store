@@ -7,11 +7,11 @@ import (
 
 // 真机诊断端点（/debug/pprof/*）。刷新卡住时：
 //
-//	curl -s "http://127.0.0.1:8011/debug/pprof/goroutine?debug=1"
+//	curl -s "http://127.0.0.1:38011/debug/pprof/goroutine?debug=1"
 //
 // 30 秒 CPU profile：
 //
-//	curl -s -o cpu.prof "http://127.0.0.1:8011/debug/pprof/profile?seconds=30"
+//	curl -s -o cpu.prof "http://127.0.0.1:38011/debug/pprof/profile?seconds=30"
 //
 // 挂在默认 mux 上，获得全套标准端点（goroutine/heap/profile/threadcreate/...）。
 func (s *Server) mountPprof() {
