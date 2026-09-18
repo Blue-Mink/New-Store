@@ -26,6 +26,11 @@
   <b>「全部」页</b>：分类筛选 · 搜索 · 卡片网格（PC 4 列 / 移动端自适配）
 </p>
 
+<p align="center">
+  <img src="docs/screenshot-mobile.png" width="880" alt="移动端三个主界面：发现、全部、详情"/><br/>
+  <b>移动端三屏</b>：发现 · 全部 · 详情——底部 dock 导航，可嵌入飞牛 App
+</p>
+
 ---
 
 ## 快速开始
