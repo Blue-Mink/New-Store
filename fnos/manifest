@@ -1,11 +1,11 @@
 appname         = fnos-apps-store
-version = 1.19.2
+version = 1.19.3
 display_name    = New Store
 platform        = x86
-maintainer      = conversun
-maintainer_url  = https://github.com/conversun
-distributor     = conversun
-distributor_url = https://github.com/conversun/fnos-store
+maintainer      = Blue-Mink
+maintainer_url  = https://github.com/Blue-Mink
+distributor     = Blue-Mink
+distributor_url = https://github.com/Blue-Mink/New-Store
 desktop_uidir   = ui
 desktop_applaunchname = fnos-apps-store.Application
 service_port    = 8011
