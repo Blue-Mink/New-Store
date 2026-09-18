@@ -92,6 +92,23 @@ func versionPartAsInt(parts []string, index int) int {
 	return v
 }
 
+// versionHasNumeric reports whether the version string contains at least
+// one non-zero numeric segment. Versions like "latest", "dev" or "v" parse
+// to all zeros in CompareVersions and must not drive an update decision
+// (a bogus "update available" badge is worse than none).
+func versionHasNumeric(v string) bool {
+	for _, part := range strings.Split(strings.TrimSpace(v), ".") {
+		digits := extractLeadingDigits(strings.TrimSpace(part))
+		if digits == "" {
+			continue
+		}
+		if n, err := strconv.Atoi(digits); err == nil && n > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func extractLeadingDigits(s string) string {
 	var b strings.Builder
 	for _, r := range s {

@@ -1,12 +1,12 @@
 import React from 'react';
 import type { AppInfo, AppOperation } from '../api/client';
-import { availableVersionLabel, installedVersionLabel } from '../api/client';
+import { availableVersionLabel, installedVersionLabel, appWebUrl, appDownloadLabel } from '../api/client';
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import AppIcon from "./AppIcon";
-import { cn, formatSpeed, formatProgress, formatCount } from "@/lib/utils";
+import { cn, formatSpeed, formatProgress } from "@/lib/utils";
 import { 
   Download, 
   RefreshCw, 
@@ -16,11 +16,8 @@ import {
   Container,
   X,
   BellOff,
-  Trash2,
   Tag,
-  Play,
-  Square,
-  Loader2,
+  ExternalLink,
 } from 'lucide-react';
 
 interface AppCardProps {
@@ -43,14 +40,22 @@ interface AppCardProps {
   onControl?: (app: AppInfo, action: 'start' | 'stop') => void;
   /** 正在执行启停操作的应用名（显示转圈） */
   controlling?: string | null;
+  /** 打开应用 Web UI（与 fnOS 应用中心"打开"按钮同目标） */
+  onOpenApp?: (app: AppInfo) => void;
 }
 
-const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, upgradeAllowed = true, onSourceFilter, onAuthorFilter, onDistributorFilter, onControl, controlling }) => {
+const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, onDetail, onCancelOp, upgradeAllowed = true, onSourceFilter, onAuthorFilter, onDistributorFilter, onOpenApp }) => {
   const isInstalled = app.installed;
   const canUpdate = isInstalled && app.has_update;
-  // daemon 能力位：nostart 系统组件（nodejs/java 等）与不支持启停的应用不显示启停按钮
-  const canControl = isInstalled && !!onControl && (app.start_stop ?? true) && app.status !== 'nostart';
-  const controlBusy = app.status === 'starting' || app.status === 'stopping';
+  const downloadLabel = appDownloadLabel(app);
+  // "打开"目标：daemon appServiceInfo；无 Web 入口的应用不渲染按钮
+  const openUrl = isInstalled ? appWebUrl(app) : null;
+  // "打开"药丸：运行中且有 Web 入口；或处于可启动状态
+  //（停止时 daemon 不下发 web 字段，启动成功后由 handleOpenApp 重新解析目标）
+  const canOpen = isInstalled && !!onOpenApp && (
+    !!openUrl || ((app.start_stop ?? true) && app.status !== 'nostart' &&
+      (app.status === 'stopped' || app.status === 'starting' || app.status === 'stopping'))
+  );
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -178,12 +183,12 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
                   </span>
                 </>
               )}
-              {app.download_count != null && app.download_count > 0 && (
+              {downloadLabel && (
                 <>
                   <span className="text-muted-foreground/30">·</span>
                   <span className="inline-flex items-center gap-0.5">
                     <Download className="h-3 w-3" />
-                    {formatCount(app.download_count)}
+                    {downloadLabel}
                   </span>
                 </>
               )}
@@ -205,10 +210,10 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
 
         {operation ? (
           <div className="pt-2 border-t border-border/20 space-y-2">
-            <Progress value={operation.progress} className="w-full h-1.5" />
+            <Progress value={operation.progress} className="w-full h-1" />
             
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-xs text-muted-foreground min-w-0">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground min-w-0 tabular-nums">
                 <span className="shrink-0">{getStepText(operation.step)}</span>
                 {operation.step === 'downloading' && operation.speed != null && operation.speed > 0 ? (
                   <>
@@ -250,38 +255,7 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
             </div>
 
             <div className="flex items-center gap-1.5">
-              {canControl && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => onControl(app, app.status === 'running' ? 'stop' : 'start')}
-                  disabled={!!operation || controlling !== null || controlBusy}
-                  aria-label={controlBusy ? `${app.status === 'starting' ? '启动中' : '停用中'} ${app.display_name}` : `${app.status === 'running' ? '停用' : '启动'} ${app.display_name}`}
-                  title={controlBusy ? (app.status === 'starting' ? '启动中…' : '停用中…') : app.status === 'running' ? '停用' : '启动'}
-                  className="rounded-full h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
-                >
-                  {controlling === app.appname || controlBusy ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : app.status === 'running' ? (
-                    <Square className="h-3.5 w-3.5 fill-current" />
-                  ) : (
-                    <Play className="h-3.5 w-3.5 fill-current" />
-                  )}
-                </Button>
-              )}
-              {isInstalled && onUninstall && (app.uninstallable ?? true) && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => onUninstall(app)}
-                  disabled={!!operation || controlling !== null}
-                  aria-label={`卸载 ${app.display_name}`}
-                  title="卸载"
-                  className="rounded-full h-8 w-8 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              )}
+              {/* App Store 风格单一药丸：未安装=安装 / 有更新=更新 / 已安装=打开 */}
               {!isInstalled ? (
                 <Button
                   onClick={() => onInstall(app)}
@@ -300,6 +274,15 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
                 >
                   <RefreshCw className="mr-1 h-3.5 w-3.5" />
                   {upgradeAllowed ? '更新' : '需手动更新'}
+                </Button>
+              ) : canOpen ? (
+                <Button
+                  onClick={() => onOpenApp(app)}
+                  aria-label={`打开 ${app.display_name}`}
+                  className="pill bg-primary text-primary-foreground px-4 h-8 text-[13px] font-semibold shadow-sm hover:opacity-90"
+                >
+                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                  打开
                 </Button>
               ) : null}
             </div>

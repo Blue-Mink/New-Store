@@ -1,19 +1,21 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { LayoutGrid, CheckCircle2, RefreshCw, Settings, MessageCircle, ChevronsLeft, ChevronsRight, Search, X, Film, ArrowDownToLine, BookOpen, Wrench, Globe, ArrowLeft, Loader2, CircleX, CircleCheck, WifiOff, ExternalLink, Package, Compass, Brain, Clapperboard, Network, ChevronsUpDown, Check } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useDebouncedValue, useKeyboardDock } from './lib/hooks';
+import { LayoutGrid, CheckCircle2, RefreshCw, Settings, MessageCircle, ChevronsLeft, ChevronsRight, Search, X, Film, ArrowDownToLine, BookOpen, Wrench, Globe, Loader2, CircleX, CircleCheck, WifiOff, ExternalLink, Package, Compass, Brain, Clapperboard, Network, ChevronsUpDown, Check, ChevronDown } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Badge } from './components/ui/badge';
 import AppList from './components/AppList';
 import AppDetailDialog from './components/AppDetailDialog';
 import ProgressOverlay from './components/ProgressOverlay';
-import SettingsDialog from './components/SettingsDialog';
+import SettingsPage from './components/SettingsPage';
 import WizardDialog from './components/WizardDialog';
 import RecommendedAppCard from './components/RecommendedAppCard';
 import FeaturedShowcase from './components/FeaturedShowcase';
 import ThemeToggle from './components/ThemeToggle';
 import MobileDock from './components/MobileDock';
 import AppRowList from './components/AppRowList';
-import { fetchApps, triggerCheck, installApp, updateApp, uninstallApp, fetchStatus, fetchStoreUpdate, triggerStoreUpdate, reloadApps, ignoreUpdate, unignoreUpdate, fetchRecommended, fetchWizard, controlApp } from './api/client';
+import { fetchApps, triggerCheck, installApp, updateApp, uninstallApp, fetchStatus, fetchStoreUpdate, triggerStoreUpdate, reloadApps, ignoreUpdate, unignoreUpdate, fetchRecommended, fetchWizard, controlApp, appWebUrl } from './api/client';
+import { connectFnOSBridge, openAppInShell } from './lib/fnos-bridge';
 import { alphaInitial } from './lib/pinyin';
 import type { AppInfo, AppOperation, SSECallback, RecommendedApp, AppWizard, WizardParam } from './api/client';
 import { toast } from "sonner"
@@ -54,7 +56,7 @@ type CategoryKey = typeof CATEGORIES[number]['key'];
 type SortKey = 'default' | 'downloads' | 'name' | 'alpha' | 'updated';
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
-  { value: 'default', label: '默认' },
+  { value: 'default', label: '随机' },
   { value: 'alpha', label: '首字母 A-Z' },
   { value: 'downloads', label: '下载量' },
   { value: 'name', label: '名称' },
@@ -98,7 +100,42 @@ const App: React.FC = () => {
   const [storeHasUpdate, setStoreHasUpdate] = useState(false);
   const [activeFilter, setActiveFilter] = useState<'all' | 'installed' | 'update_available' | 'recommended'>('all');
   const [recommendedApps, setRecommendedApps] = useState<RecommendedApp[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [searchExpanded, setSearchExpanded] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  // 收起 = 立即（无过渡，1.14.24 用户要求恢复原来的生硬但干脆的行为）。
+  // 收起触发源：Enter / 点外部(blur) / × 清除 / 收起按钮 / 键盘收起（无论有无输入，
+  // 有输入时搜索词保留、列表保持过滤）。
+  // 注意：**不做**输入停顿自动收起 —— 中文输入停顿思考时会被误收（1.14.23 修复）。
+  const collapseSearch = () => {
+    setSearchExpanded(false);
+    searchInputRef.current?.blur();
+  };
+  const expandSearch = () => {
+    setSearchExpanded(true);
+  };
+  // 搜索防抖：按键即时更新输入框（廉价），筛选/列表只依赖 150ms 后的
+  // searchQuery —— WebView 里打字不再每个字符都重渲染数百张卡片。
+  const searchQuery = useDebouncedValue(searchInput, 150);
+  // 底部 dock 键盘处理（钉在屏幕底边方案，对齐 iOS App Store 观感）：
+  //   offsetPx = 键盘高度 → dock 用 bottom:-offset 下移，键盘弹出时 dock
+  //   停在物理屏幕底边被键盘盖住（不跟键盘上移、不重挂载、无回弹位移），
+  //   收起时已就位于视口底边；hidden 仅 pan 型壳（整个 WebView 被平移、
+  //   视口不变）兜底用 —— 聚焦输入框期间整体隐藏。
+  // 兼容：浏览器型（visualViewport 差值）、飞牛 app 等 adjustResize
+  // WebView（innerHeight 收缩）、iframe 裁剪型。
+  const { offsetPx: dockOffsetPx, hidden: dockHidden } = useKeyboardDock();
+  // 键盘收起自动收搜索框：展开态下键盘从弹出到收起（offsetPx 开→关沿）即收起 ——
+  // 飞牛 app 点 IME 完成/收起按钮不触发 blur，需键盘收起信号兜底。
+  // 无论有无输入：空=直接收起；有输入=搜索词保留、列表保持过滤。
+  const prevKbOpenRef = useRef(false);
+  useEffect(() => {
+    const open = dockOffsetPx > 0;
+    if (prevKbOpenRef.current && !open && searchExpanded) {
+      collapseSearch();
+    }
+    prevKbOpenRef.current = open;
+  }, [dockOffsetPx, searchExpanded]);
   // 源 / 开发者 / 发布者 过滤（点卡片徽章或详情里的名字进入，可清除）
   const [activeSourceFilter, setActiveSourceFilter] = useState<string | null>(null);
   const [activeAuthorFilter, setActiveAuthorFilter] = useState<string | null>(null);
@@ -114,8 +151,18 @@ const App: React.FC = () => {
   const [wizardLoading, setWizardLoading] = useState(false);
   const [detailApp, setDetailApp] = useState<AppInfo | null>(null);
   const [successInfo, setSuccessInfo] = useState<{app: AppInfo; operation: 'install' | 'update'} | null>(null);
+  // App Store large title：内容滚动后标题收缩、头部转毛玻璃
+  const [mainScrolled, setMainScrolled] = useState(false);
   const [sortBy, setSortBy] = useState<SortKey>('default');
+  // 「全部」视图随机展示：每次数据加载后重新洗牌（不再按 fnos-apps 等来源分组置顶），
+  // 同一次会话内顺序稳定（切 tab 返回不重洗，记住的滚动位置仍落在同一应用上）。
+  const [shuffleTick, setShuffleTick] = useState(0);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  // 发现页「探索推荐」区：默认折叠，点「展开」显示推荐网格
+  const [exploreExpanded, setExploreExpanded] = useState(false);
+  // 排序菜单位置：pill 行是 overflow-x-auto 滚动容器（会同时裁剪 y 轴），
+  // 菜单必须 fixed 定位逃出裁剪，坐标在打开时按触发钮实测位置计算。
+  const [sortMenuPos, setSortMenuPos] = useState<{ left: number; top: number } | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
     localStorage.getItem('sidebar-collapsed') === 'true'
   );
@@ -132,7 +179,16 @@ const App: React.FC = () => {
     loadApps();
     fetchStoreUpdate().then(info => setStoreHasUpdate(info.has_update)).catch(() => {});
     fetchRecommended().then(data => setRecommendedApps(data.apps)).catch(() => {});
+    // 预握手 fnOS Web UI 壳窗口（postmate 子端协议）：内嵌时"应用设置"
+    // 才能秒开「设置→应用」面板；独立打开时静默失败无副作用。
+    connectFnOSBridge().catch(() => {});
+    // large title 收缩：滚动容器是 window（实测 main 的 overflow-y-auto
+    // 不生效，整页随窗口滚动、sticky 头部吸顶），监听 window scroll
+    const onScroll = () => setMainScrolled(window.scrollY > 24);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
     return () => {
+      window.removeEventListener('scroll', onScroll);
       // Cleanup on unmount: cancel pending poll timer and any in-flight reload SSE
       if (pollTimerRef.current) {
         clearTimeout(pollTimerRef.current);
@@ -142,6 +198,46 @@ const App: React.FC = () => {
       reloadHandleRef.current = null;
     };
   }, []);
+
+  // 底部 dock / 侧栏切换 tab：记住每个 tab 的滚动位置，切回时恢复
+  //（实际滚动容器是 window —— 实测 main 的 overflow-y-auto 不生效，整页随窗口滚动）
+  const scrollPosRef = useRef<Record<string, number>>({});
+  const activeFilterRef = useRef(activeFilter);
+  // 持续记录当前 tab 的滚动位置。不能在切换后的 effect 里读 window.scrollY：
+  // React 提交新列表后文档高度突变，浏览器会先把 scrollY 钳制到新列表的
+  // 最大值，effect 再读就已经是被钳制过的错误值（深滚动切短列表必丢位置）。
+  useEffect(() => {
+    const onScroll = () => { scrollPosRef.current[activeFilterRef.current] = window.scrollY; };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+  // tab 切换（dock / 侧栏 / 返回按钮 / 搜索跳转统一走这里）：
+  // 点击时 DOM 还没换、浏览器也还没钳制 scrollY，此刻保存的才是旧 tab 的真实
+  // 位置；并同步把 activeFilterRef 指向新 tab，使 DOM 切换期间浏览器因文档
+  // 高度突变发出的 scroll 事件记到新 tab 名下，不会覆盖旧 tab 的位置。
+  const switchFilter = useCallback((next: 'all' | 'installed' | 'update_available' | 'recommended') => {
+    const prev = activeFilterRef.current;
+    scrollPosRef.current[prev] = window.scrollY;
+    activeFilterRef.current = next;
+    setActiveFilter(next);
+    setActiveCategory(null);
+  }, []);
+  // 切回某 tab 时恢复其滚动位置：等新列表提交布局；目标超出当前文档高度时
+  // 逐帧重试（列表还在渲染），最多 10 帧后钳制到当前最大值兜底。
+  useEffect(() => {
+    const target = scrollPosRef.current[activeFilter] ?? 0;
+    let tries = 0;
+    let raf = 0;
+    const attempt = () => {
+      const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      if (target <= max) { window.scrollTo(0, target); return; }
+      if (tries++ < 10) { raf = requestAnimationFrame(attempt); }
+      else { window.scrollTo(0, max); }
+    };
+    requestAnimationFrame(() => requestAnimationFrame(attempt));
+    return () => cancelAnimationFrame(raf);
+  }, [activeFilter]);
 
   const setAppOp = useCallback((appname: string, op: AppOperation | null) => {
     setAppOperations(prev => {
@@ -194,6 +290,7 @@ const App: React.FC = () => {
     try {
       const data = await fetchApps();
       setApps(data.apps);
+      setShuffleTick(t => t + 1); // 新数据 → 重新洗牌（随机展示）
       setUpgradeAllowed(data.upgrade_allowed !== false);
       setLastCheck(data.last_check);
       if (data.apps.length > 0) {
@@ -211,18 +308,73 @@ const App: React.FC = () => {
 
   // 启动/停用已安装应用（与 fnOS 应用中心同步）
   const [controlling, setControlling] = useState<string | null>(null);
-  const handleControl = async (app: AppInfo, action: 'start' | 'stop') => {
+  // loadApps 每次渲染都是新函数；handleControl 要稳定（供 memo 化列表使用），
+  // 故经 ref 间接调用，避免把 loadApps 身份带进依赖数组。
+  const loadAppsRef = useRef<(autoReload?: boolean) => Promise<void>>(() => Promise.resolve());
+  loadAppsRef.current = loadApps;
+
+  const handleControl = useCallback(async (app: AppInfo, action: 'start' | 'stop') => {
     setControlling(app.appname);
     try {
       await controlApp(app.appname, action);
       toast.success(action === 'start' ? `已启动「${app.display_name}」` : `已停用「${app.display_name}」`);
-      await loadApps();
+      await loadAppsRef.current();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : `${action === 'start' ? '启动' : '停用'}失败`);
     } finally {
       setControlling(null);
     }
-  };
+  }, []);
+
+  // 打开已安装应用的 Web UI（与 fnOS 应用中心"打开"按钮同机制）：
+  // 内嵌 fnOS Web UI（microApp 桥可用）时走壳窗口 openApp(serviceName)
+  // 在壳内任务标签页打开 —— 原生应用中心同款行为；
+  // 独立打开 :8011（桥不可用）时降级为新浏览器标签打开应用 URL。
+  const handleOpenApp = useCallback(async (app: AppInfo) => {
+    // App Store 风格单一"打开"按钮：应用未运行时先自动启动，轮询到 running 再打开。
+    // 注意：应用停止时 daemon 不下发 web 字段（web_port/web_service_name 均为空），
+    // 启动成功后必须用重新拉取的最新记录解析打开目标。
+    let target = app;
+    if (app.status && app.status !== 'running' && app.status !== 'nostart' && (app.start_stop ?? true)) {
+      try {
+        toast.info(`「${app.display_name}」尚未运行，正在启动后打开…`);
+        await controlApp(app.appname, 'start');
+        const t0 = Date.now();
+        let fresh: AppInfo | undefined;
+        let running = false;
+        while (Date.now() - t0 < 30000) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const res = await fetchApps();
+            fresh = (res.apps || []).find(a => a.appname === app.appname);
+            if (fresh) {
+              if (fresh.status === 'running') { running = true; break; }
+              if (fresh.status === 'stopped') break; // 启动后又回落到 stopped，视为失败
+            }
+          } catch { /* 单次拉取失败继续轮询 */ }
+        }
+        await loadAppsRef.current();
+        if (!running) {
+          toast.error(`「${app.display_name}」未能及时运行，请稍后重试`);
+          return;
+        }
+        if (fresh) target = fresh;
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : '启动失败，无法打开');
+        return;
+      }
+    }
+    if (target.web_service_name) {
+      const ok = await openAppInShell(target.web_service_name);
+      if (ok) return;
+    }
+    const url = appWebUrl(target);
+    if (!url) {
+      toast.error(`「${target.display_name}」没有可打开的 Web 界面`);
+      return;
+    }
+    window.open(url, '_blank', 'noopener');
+  }, []);
 
   const triggerReload = () => {
     // Cancel any in-flight reload SSE before starting a new one.
@@ -448,9 +600,9 @@ const App: React.FC = () => {
     }
   }, [createSSEHandler, setAppOp]);
 
-  const handleUninstall = (app: AppInfo) => {
+  const handleUninstall = useCallback((app: AppInfo) => {
     setPendingUninstallApp(app);
-  };
+  }, []);
 
   const confirmUninstall = useCallback(async () => {
     if (!pendingUninstallApp) return;
@@ -573,7 +725,23 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const filteredApps = apps.filter(app => {
+  // 随机排序权重：Fisher-Yates 洗牌当前应用列表，key → 随机位次
+  const appsRef = useRef<AppInfo[]>(apps);
+  appsRef.current = apps;
+  const shuffledRank = useMemo(() => {
+    const arr = appsRef.current.map(a => a.key || a.appname);
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    const rank = new Map<string, number>();
+    arr.forEach((n, idx) => rank.set(n, idx));
+    return rank;
+    // 故意只依赖 shuffleTick：洗牌时机 = 每次 loadApps 成功（见 setShuffleTick）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shuffleTick]);
+
+  const filteredApps = useMemo(() => apps.filter(app => {
     if (activeFilter === 'installed' && !app.installed) return false;
     if (activeFilter === 'update_available' && !app.has_update) return false;
     if (activeCategory && app.category !== activeCategory) return false;
@@ -614,21 +782,27 @@ const App: React.FC = () => {
       case 'updated':
         return (b.updated_at || '').localeCompare(a.updated_at || '');
       default:
+        // 随机展示：「全部」视图按洗牌顺序（不按来源分组）；其他 tab 保持后端顺序
+        if (activeFilter === 'all') {
+          const ra = shuffledRank.get(a.key || a.appname) ?? Number.MAX_SAFE_INTEGER;
+          const rb = shuffledRank.get(b.key || b.appname) ?? Number.MAX_SAFE_INTEGER;
+          return ra - rb;
+        }
         return 0;
     }
-  });
+  }), [apps, activeFilter, activeCategory, activeSourceFilter, activeAuthorFilter, activeDistributorFilter, searchQuery, sortBy, shuffledRank]);
 
-  const counts = {
+  const counts = useMemo(() => ({
       all: apps.length,
       installed: apps.filter(a => a.installed).length,
       update_available: apps.filter(a => a.has_update).length,
       recommended: recommendedApps.length
-  };
+  }), [apps, recommendedApps]);
 
-  const categoryCounts = CATEGORIES.reduce((acc, cat) => {
+  const categoryCounts = useMemo(() => CATEGORIES.reduce((acc, cat) => {
     acc[cat.key] = apps.filter(a => a.category === cat.key).length;
     return acc;
-  }, {} as Record<string, number>);
+  }, {} as Record<string, number>), [apps]);
 
   // 「全部」复合 pill：pill 主体 = 选择全部分类；右侧 ▾ = 排序菜单（折叠在全部里）
   const allCategoryPill = (
@@ -647,16 +821,33 @@ const App: React.FC = () => {
           role="button"
           aria-label="排序"
           title="排序"
-          onClick={(e) => { e.stopPropagation(); setSortMenuOpen(v => !v); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (sortMenuOpen) {
+              setSortMenuOpen(false);
+              return;
+            }
+            // 菜单左缘与「全部」pill 左缘对齐（不用 ▾ 的位置）
+            const r = ((e.currentTarget as HTMLElement).parentElement as HTMLElement).getBoundingClientRect();
+            const menuW = 160;
+            const menuH = 190;
+            const left = Math.max(8, Math.min(r.left, window.innerWidth - menuW - 8));
+            const top = Math.max(8, Math.min(r.bottom + 4, window.innerHeight - menuH - 8));
+            setSortMenuPos({ left, top });
+            setSortMenuOpen(true);
+          }}
           className={cn("flex items-center justify-center h-6 w-6 rounded-full transition-colors", sortMenuOpen && "bg-black/10")}
         >
           <ChevronsUpDown className="h-3.5 w-3.5" />
         </span>
       </button>
-      {sortMenuOpen && (
+      {sortMenuOpen && sortMenuPos && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setSortMenuOpen(false)} />
-          <div className="absolute left-0 top-9 z-50 w-40 rounded-xl border border-border bg-popover p-1 shadow-lg">
+          <div
+            className="fixed z-50 w-40 rounded-xl border border-border bg-popover p-1 shadow-lg"
+            style={{ left: sortMenuPos.left, top: sortMenuPos.top }}
+          >
             <p className="px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground">排序</p>
             {SORT_OPTIONS.map(o => (
               <button
@@ -677,7 +868,7 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row">
       <aside className={cn(
-        "hidden md:flex flex-col bg-card/70 backdrop-blur-xl border-r border-border/50 h-screen sticky top-0 transition-all duration-300 overflow-hidden",
+        "hidden md:flex flex-col bg-card/70 backdrop-blur-xl border-r border-border/50 h-screen sticky top-0 transition-all duration-300 overflow-hidden shrink-0",
         sidebarCollapsed ? "w-[68px]" : "w-64"
       )}>
         <TooltipProvider delayDuration={0}>
@@ -689,7 +880,7 @@ const App: React.FC = () => {
            ) : (
              <div className="flex items-start justify-between gap-2">
                <div className="min-w-0">
-                 <h1 className="text-xl font-semibold tracking-tight whitespace-nowrap">fnOS Apps</h1>
+                 <h1 className="text-xl font-semibold tracking-tight whitespace-nowrap">New Store</h1>
                  <p className="text-sm text-muted-foreground mt-1.5 whitespace-nowrap">
                     上次检查: {lastCheck ? new Date(lastCheck).toLocaleString() : '从未'}
                  </p>
@@ -708,7 +899,7 @@ const App: React.FC = () => {
                 <Button
                   variant={activeFilter === 'recommended' ? 'default' : 'ghost'}
                   className={cn("w-full h-10 shadow-none rounded-lg font-medium", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
-                  onClick={() => { setActiveFilter('recommended'); setActiveCategory(null); }}
+                  onClick={() => { switchFilter('recommended'); }}
                 >
                   <Compass className={cn("h-4 w-4 shrink-0", !sidebarCollapsed && "mr-3")} />
                   {!sidebarCollapsed && (
@@ -726,7 +917,7 @@ const App: React.FC = () => {
                 <Button
                   variant={activeFilter === 'all' ? 'default' : 'ghost'}
                   className={cn("w-full h-10 shadow-none rounded-lg font-medium", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
-                  onClick={() => setActiveFilter('all')}
+                  onClick={() => { switchFilter('all'); }}
                 >
                   <LayoutGrid className={cn("h-4 w-4 shrink-0", !sidebarCollapsed && "mr-3")} />
                   {!sidebarCollapsed && (
@@ -744,7 +935,7 @@ const App: React.FC = () => {
                 <Button
                   variant={activeFilter === 'installed' ? 'default' : 'ghost'}
                   className={cn("w-full h-10 shadow-none rounded-lg font-medium", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
-                  onClick={() => setActiveFilter('installed')}
+                  onClick={() => { switchFilter('installed'); }}
                 >
                   <CheckCircle2 className={cn("h-4 w-4 shrink-0", !sidebarCollapsed && "mr-3")} />
                   {!sidebarCollapsed && (
@@ -762,7 +953,7 @@ const App: React.FC = () => {
                 <Button
                   variant={activeFilter === 'update_available' ? 'default' : 'ghost'}
                   className={cn("w-full h-10 shadow-none rounded-lg font-medium", sidebarCollapsed ? "justify-center px-0" : "justify-start px-3")}
-                  onClick={() => setActiveFilter('update_available')}
+                  onClick={() => { switchFilter('update_available'); }}
                 >
                   <div className="relative shrink-0">
                     <RefreshCw className={cn("h-4 w-4", !sidebarCollapsed && "mr-3")} />
@@ -837,62 +1028,120 @@ const App: React.FC = () => {
         </TooltipProvider>
        </aside>
 
-      <div className="flex-1 flex flex-col min-h-0 md:min-h-screen">
-        <div className="md:hidden bg-card/70 backdrop-blur-xl border-b border-border/50 px-4 pt-4 pb-3 sticky top-0 z-20 flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-                <h1 className="text-xl font-bold tracking-tight">fnOS Apps</h1>
-                <div className="flex items-center gap-0.5">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-9 w-9"
-                      onClick={() => setSettingsVisible(true)}
-                      aria-label="设置"
-                      title="设置"
-                    >
-                      <div className="relative">
-                        <Settings className="h-[18px] w-[18px]" />
-                        {storeHasUpdate && (
-                          <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-destructive" />
-                        )}
-                      </div>
-                    </Button>
-                    <ThemeToggle />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-9 w-9"
-                      onClick={handleCheck}
-                      disabled={checking}
-                      aria-label="检查更新"
-                      title="检查更新"
-                    >
-                      <RefreshCw className={cn("h-[18px] w-[18px]", checking && "animate-spin")} />
-                    </Button>
-                </div>
-            </div>
-            {activeFilter !== 'recommended' && (
-              <div className="relative">
+      <div className="flex-1 flex flex-col min-h-0 md:min-h-screen min-w-0">
+        <div className={cn(
+            "md:hidden bg-card/70 backdrop-blur-xl border-b border-border/50 px-4 pt-4 pb-3 sticky top-0 z-20 flex flex-col gap-3 transition-[box-shadow,border-color] duration-300",
+            searchExpanded && "shadow-lg border-b-transparent"
+          )}>
+            {searchExpanded ? (
+              /* 展开态：与原搜索框等长的全宽搜索框，悬浮在页面上方（sticky header + 阴影）；
+                 收起立即（无过渡，1.14.24 用户要求） */
+              <div className="search-expand-anim relative">
                 <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                 <Input
+                  ref={searchInputRef}
+                  autoFocus
                   type="text"
                   placeholder="搜索应用..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-8 h-9 shadow-none rounded-full border-0 bg-muted/60 focus-visible:ring-primary/40"
+                  value={searchInput}
+                  onChange={(e) => {
+                    setSearchInput(e.target.value);
+                    /* 从"发现"页搜索时切到应用列表，保证有结果区。
+                       输入不再触发任何自动收起（输入途中保持展开） */
+                    if (activeFilter === 'recommended' && e.target.value) switchFilter('all');
+                  }}
+                  onKeyDown={(e) => {
+                    /* 按回车 → 收起（搜索词保留，列表保持过滤） */
+                    if (e.key === 'Enter') collapseSearch();
+                  }}
+                  onBlur={() => collapseSearch()}
+                  className="w-full pl-9 pr-16 h-9 shadow-none rounded-full border-0 bg-muted/60 focus-visible:ring-primary/40"
                 />
-                {searchQuery && (
+                {searchInput && (
                   <button
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    /* preventDefault 保住输入框焦点，让清除点击生效（否则 blur 先收起）；
+                       清空 → 带动画收起 */
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => { setSearchInput(''); collapseSearch(); }}
+                    className="absolute right-[52px] top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   >
                     <X className="h-4 w-4" />
                   </button>
                 )}
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => collapseSearch()}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 h-8 px-1.5 text-[13px] font-medium text-primary"
+                >
+                  收起
+                </button>
+              </div>
+            ) : (
+              /* 收起态：标题 + 紧凑搜索药丸 + 三个按钮（间距加大防误触） */
+              <div className="flex items-center justify-between gap-2">
+                {/* 收起态：加长药丸；有搜索词时显示内容 + × 清除 */}
+                <button
+                  onClick={() => expandSearch()}
+                  className="flex items-center gap-1.5 h-9 w-[150px] pl-3.5 pr-2.5 rounded-full bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                  aria-label="搜索"
+                  title="搜索"
+                >
+                  <Search className="h-[18px] w-[18px] shrink-0" />
+                  {searchInput ? (
+                    <>
+                      <span className="min-w-0 flex-1 truncate text-left text-[13px]">{searchInput}</span>
+                      <span
+                        role="button"
+                        aria-label="清除搜索"
+                        title="清除搜索"
+                        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSearchInput('');
+                        }}
+                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-black/10 text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-3 w-3" />
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-[13px]">搜索</span>
+                  )}
+                </button>
+                <div className="flex items-center gap-3 shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={() => setSettingsVisible(true)}
+                    aria-label="设置"
+                    title="设置"
+                  >
+                    <div className="relative">
+                      <Settings className="h-[18px] w-[18px]" />
+                      {storeHasUpdate && (
+                        <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-destructive" />
+                      )}
+                    </div>
+                  </Button>
+                  <ThemeToggle className="h-9 w-9" />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={handleCheck}
+                    disabled={checking}
+                    aria-label="检查更新"
+                    title="检查更新"
+                  >
+                    <RefreshCw className={cn("h-[18px] w-[18px]", checking && "animate-spin")} />
+                  </Button>
+                </div>
               </div>
             )}
+            {/* 分类 pill 行：与上方搜索框左缘对齐（header px-4），不再贴屏幕边 */}
             {activeFilter !== 'recommended' && (
-              <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1">
+              <div className="flex gap-2 overflow-x-auto no-scrollbar">
                 {allCategoryPill}
                 {CATEGORIES.map(cat => (
                   <button
@@ -910,25 +1159,18 @@ const App: React.FC = () => {
             )}
         </div>
 
-        <header className="hidden md:flex bg-card/70 backdrop-blur-xl border-b border-border/50 px-8 py-4 justify-between items-center sticky top-0 z-10">
+        <header className={cn(
+            "hidden md:flex px-8 justify-between items-center sticky top-0 z-10 transition-all duration-300",
+            mainScrolled ? "bg-card/70 backdrop-blur-xl border-b border-border/50 py-2" : "bg-transparent border-b border-transparent py-4"
+          )}>
            <div className="flex items-center gap-2 shrink-0">
-              {activeFilter === 'recommended' && (
-                <button
-                  onClick={() => setActiveFilter('all')}
-                  className="inline-flex items-center gap-1 h-8 pl-1.5 pr-3 rounded-full text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                  title="返回应用列表"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                  返回
-                </button>
-              )}
-           <h2 className="text-2xl font-bold tracking-tight shrink-0">
+           <h2 className={cn("font-bold tracking-tight shrink-0 transition-all duration-300", mainScrolled ? "text-lg" : "text-[32px] leading-[1.2]")}>
               {activeFilter === 'recommended' && '发现'}
               {activeFilter === 'all' && '应用'}
               {activeFilter === 'installed' && '已安装'}
               {activeFilter === 'update_available' && '可用更新'}
               {activeFilter !== 'recommended' && activeCategory && (
-                <span className="text-muted-foreground font-normal text-xl">{' · '}{CATEGORIES.find(c => c.key === activeCategory)?.label}</span>
+                <span className={cn("text-muted-foreground font-normal transition-all duration-300", mainScrolled ? "text-sm" : "text-xl")}>{' · '}{CATEGORIES.find(c => c.key === activeCategory)?.label}</span>
               )}
            </h2>
            </div>
@@ -940,13 +1182,13 @@ const App: React.FC = () => {
                      <Input
                        type="text"
                        placeholder="搜索应用..."
-                       value={searchQuery}
-                       onChange={(e) => setSearchQuery(e.target.value)}
+                       value={searchInput}
+                       onChange={(e) => setSearchInput(e.target.value)}
                        className="w-56 md:w-64 pl-9 pr-8 h-9 shadow-none rounded-full border-0 bg-muted/60 focus-visible:ring-primary/40"
                      />
-                     {searchQuery && (
+                     {searchInput && (
                        <button
-                         onClick={() => setSearchQuery('')}
+                         onClick={() => setSearchInput('')}
                          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                        >
                          <X className="h-4 w-4" />
@@ -984,12 +1226,25 @@ const App: React.FC = () => {
               )}
               {recommendedApps.length > 0 ? (
                 <section>
-                  <h2 className="text-lg font-bold tracking-tight mb-3">编辑推荐</h2>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                    {recommendedApps.map(app => (
-                      <RecommendedAppCard key={app.name} app={app} />
-                    ))}
+                  <div className="flex items-center gap-2 mb-3">
+                    <h2 className="text-lg font-bold tracking-tight">探索推荐</h2>
+                    <button
+                      type="button"
+                      onClick={() => setExploreExpanded(v => !v)}
+                      aria-expanded={exploreExpanded}
+                      className="inline-flex items-center gap-1 h-7 px-3 rounded-full bg-muted/60 hover:bg-muted text-xs font-medium text-foreground transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    >
+                      {exploreExpanded ? '收起' : '展开'}
+                      <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", exploreExpanded && "rotate-180")} />
+                    </button>
                   </div>
+                  {exploreExpanded && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                      {recommendedApps.map(app => (
+                        <RecommendedAppCard key={app.name} app={app} />
+                      ))}
+                    </div>
+                  )}
                 </section>
               ) : (
                 <div className="flex flex-col items-center justify-center h-64">
@@ -1074,6 +1329,7 @@ const App: React.FC = () => {
                    onDistributorFilter={setActiveDistributorFilter}
                    onControl={handleControl}
                    controlling={controlling}
+                   onOpenApp={handleOpenApp}
                 />
               </div>
               <div className="md:hidden">
@@ -1093,6 +1349,7 @@ const App: React.FC = () => {
                   onDistributorFilter={setActiveDistributorFilter}
                   onControl={handleControl}
                   controlling={controlling}
+                  onOpenApp={handleOpenApp}
                 />
               </div>
             </>
@@ -1146,12 +1403,18 @@ const App: React.FC = () => {
         </main>
       </div>
 
-      {/* 移动端底部 dock（iOS App Store 标签栏） */}
-      <MobileDock
-        active={activeFilter}
-        onSelect={(key) => { setActiveFilter(key); setActiveCategory(null); }}
-        updateCount={counts.update_available}
-      />
+      {/* 移动端底部 dock（iOS App Store 标签栏）：
+          始终挂载，键盘弹出时靠 bottomOffset 下移钉在物理屏幕底边
+          （被键盘盖住、不跟键盘上移、收起无回弹）；仅 pan 型壳兜底
+          时整体隐藏。 */}
+      {!dockHidden && (
+        <MobileDock
+          active={activeFilter}
+          onSelect={(key) => { switchFilter(key); }}
+          updateCount={counts.update_available}
+          bottomOffset={dockOffsetPx}
+        />
+      )}
 
       {selfUpdateActive && selfUpdateState && (
         <ProgressOverlay
@@ -1164,14 +1427,12 @@ const App: React.FC = () => {
         />
       )}
       
-      {settingsVisible && (
-        <SettingsDialog
-            visible={settingsVisible}
-            onClose={() => setSettingsVisible(false)}
-            onStoreUpdate={handleStoreUpdate}
-            onCatalogChanged={() => setTimeout(() => loadApps(), 2500)}
-        />
-      )}
+      <SettingsPage
+        open={settingsVisible}
+        onOpenChange={setSettingsVisible}
+        onStoreUpdate={handleStoreUpdate}
+        onCatalogChanged={() => setTimeout(() => loadApps(), 2500)}
+      />
 
       {wizardApp && (
         <WizardDialog
@@ -1223,11 +1484,14 @@ const App: React.FC = () => {
         onSourceFilter={setActiveSourceFilter}
         onAuthorFilter={setActiveAuthorFilter}
         onDistributorFilter={setActiveDistributorFilter}
+        onOpenApp={handleOpenApp}
+        onControl={handleControl}
+        controlling={controlling}
       />
 
       {successInfo && (
         <Dialog open={!!successInfo} onOpenChange={(open) => !open && setSuccessInfo(null)}>
-          <DialogContent className="sm:max-w-sm">
+          <DialogContent className="sm:max-w-sm rounded-[18px] border-border/20 shadow-appstore bg-card">
             <DialogHeader>
               <div className="flex items-center gap-3">
                 {successInfo.app.icon_url ? (

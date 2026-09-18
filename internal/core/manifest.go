@@ -27,10 +27,7 @@ type Manifest struct {
 	Checksum       string
 }
 
-const (
-	manifestFieldWidth      = 16
-	conversunDistributorTag = "conversun"
-)
+const manifestFieldWidth = 16
 
 func ParseManifest(path string) (*Manifest, error) {
 	f, err := os.Open(path)
@@ -123,10 +120,12 @@ func ScanInstalled(appsDir string) ([]Manifest, error) {
 			continue
 		}
 
-		if m.Distributor != conversunDistributorTag {
-			continue
-		}
-
+		// 不过滤 distributor：真实环境里已装 manifest 的 distributor 是各
+		// FPK 作者署名（fnos / 源作者名 / 空），从没有 conversun —— 按
+		// conversun 过滤会让扫描恒为空，所有已装应用只能走 daemon 兜底
+		// 路径（ReconcileInstalled 强制视为最新），版本比较永远不执行，
+		// dock「有更新」恒为 0（2026-09-18 测试机 wb2api 1.9.2→1.10.0
+		// 不亮角标实锤）。
 		apps = append(apps, *m)
 	}
 

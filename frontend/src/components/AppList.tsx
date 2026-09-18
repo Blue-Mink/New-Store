@@ -22,6 +22,9 @@ interface AppListProps {
   onDistributorFilter?: (distributor: string) => void;
   onControl?: (app: AppInfo, action: 'start' | 'stop') => void;
   controlling?: string | null;
+  /** 打开已安装应用的 Web UI（有 web 入口的应用才渲染按钮）。 */
+  onOpenApp?: (app: AppInfo) => void;
+  /** 打开应用设置（fnOS 设置→应用 的该应用面板）。 */
 }
 
 const getEmptyMessage = (filterType?: string) => {
@@ -35,7 +38,7 @@ const getEmptyMessage = (filterType?: string) => {
   }
 };
 
-const AppList: React.FC<AppListProps> = ({ apps, loading, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, filterType, appOperations, searchQuery, upgradeAllowed, onSourceFilter, onAuthorFilter, onDistributorFilter, onControl, controlling }) => {
+const AppList: React.FC<AppListProps> = ({ apps, loading, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, filterType, appOperations, searchQuery, upgradeAllowed, onSourceFilter, onAuthorFilter, onDistributorFilter, onControl, controlling, onOpenApp }) => {
   if (loading) {
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -89,10 +92,13 @@ const AppList: React.FC<AppListProps> = ({ apps, loading, onInstall, onUpdate, o
           onDistributorFilter={onDistributorFilter}
           onControl={onControl}
           controlling={controlling}
+          onOpenApp={onOpenApp}
         />
       ))}
     </div>
   );
 };
 
-export default AppList;
+// memo：搜索输入（防抖前）/其他无关状态变化时，若 apps 引用与回调未变，
+// 跳过整棵卡片树的重新渲染 —— 这是 WebView 输入流畅度的关键。
+export default React.memo(AppList);

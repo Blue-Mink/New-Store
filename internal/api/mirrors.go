@@ -2,8 +2,8 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,8 +57,12 @@ func (s *Server) handleCheckMirrors(w http.ResponseWriter, r *http.Request) {
 			wg.Add(1)
 			go func(idx int, mirror config.GitHubMirror) {
 				defer wg.Done()
-				testURL := mirror.URL + "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64"
+				testURL := probeURLFor(mirror)
 				latency, status := checkURL(r.Context(), testURL)
+				// 手动测速结果同样汇入智能监测（和后台探测共用计数器）
+				if s.mirrorMon != nil {
+					s.mirrorMon.Record(mirror.Key, mirror.Label, status == "ok", latency)
+				}
 				results <- indexedResult{
 					index:  idx,
 					isGH:   true,
@@ -73,8 +77,11 @@ func (s *Server) handleCheckMirrors(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			testURL := cfg.CustomGitHubMirror + "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64"
+			testURL := strings.TrimRight(cfg.CustomGitHubMirror, "/") + "/" + defaultProbeFile
 			latency, status := checkURL(r.Context(), testURL)
+			if s.mirrorMon != nil {
+				s.mirrorMon.Record("custom", "自定义", status == "ok", latency)
+			}
 			results <- indexedResult{
 				index:  -1,
 				isGH:   true,
@@ -83,23 +90,30 @@ func (s *Server) handleCheckMirrors(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
-	// Check Docker mirrors concurrently
+	// Check Docker mirrors concurrently（registry /v2/ ping，401=存活）
 	if !skipDK {
 		for i, m := range dkMirrors {
-			if m.Key == "direct" || m.Key == "custom" {
+			if m.Key == "direct" || m.Key == "custom" || m.Key == "auto" {
+				continue
+			}
+			testURL := dockerProbeURLFor(m)
+			if testURL == "" {
 				continue
 			}
 			wg.Add(1)
-			go func(idx int, mirror config.DockerMirror) {
+			go func(idx int, mirror config.DockerMirror, u string) {
 				defer wg.Done()
-				testURL := fmt.Sprintf("https://%sv2/", mirror.URL)
-				latency, status := checkURL(r.Context(), testURL)
+				latency, status := checkRegistryWith(dockerProbeClient(mirror), r.Context(), u)
+				// 手动测速结果同样汇入智能监测（和后台探测共用计数器）
+				if s.dockerMirrorMon != nil {
+					s.dockerMirrorMon.Record(mirror.Key, mirror.Label, status == "ok", latency)
+				}
 				results <- indexedResult{
 					index:  idx,
 					isGH:   false,
 					result: mirrorCheckResult{Key: mirror.Key, Label: mirror.Label, LatencyMs: latency, Status: status},
 				}
-			}(i, m)
+			}(i, m, testURL)
 		}
 	}
 
@@ -108,8 +122,11 @@ func (s *Server) handleCheckMirrors(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			testURL := fmt.Sprintf("https://%sv2/", cfg.CustomDockerMirror)
-			latency, status := checkURL(r.Context(), testURL)
+			testURL := "https://" + strings.TrimRight(cfg.CustomDockerMirror, "/") + "/v2/"
+			latency, status := checkRegistry(r.Context(), testURL)
+			if s.dockerMirrorMon != nil {
+				s.dockerMirrorMon.Record("custom", "自定义", status == "ok", latency)
+			}
 			results <- indexedResult{
 				index:  -1,
 				isGH:   false,
@@ -166,6 +183,10 @@ func checkURL(parent context.Context, url string) (latencyMs int, status string)
 	}
 	defer resp.Body.Close()
 
-	// Any response (even 401/403) proves the mirror is reachable
+	// HTTP >= 400 视为不可用：实测多个"限流/拒服"镜像对探测 URL 返回
+	// 403/404/429（如 gh.ddlc.top 的 429），它们并不能代理下载。
+	if resp.StatusCode >= 400 {
+		return int(elapsed.Milliseconds()), "error"
+	}
 	return int(elapsed.Milliseconds()), "ok"
 }

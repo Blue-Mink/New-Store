@@ -13,6 +13,39 @@ type AppControl struct {
 	Upgrade     bool // supports in-place upgrade
 }
 
+// WebService describes the openable web UI of an installed app, from the
+// daemon's appServiceInfo. Type is "iframe" or "url"; a zero Port means the
+// app has no openable web entry (the store must not render an "打开" button).
+type WebService struct {
+	Protocol string // "http" / "https" (daemon default: http)
+	Host     string // daemon value; EMPTY on measured boxes — the UI fills in
+	// the host the user reached the store on (window.location.hostname),
+	// which is correct both for direct :8011 access and for the iframe
+	// embedded in the fnOS web UI (same host).
+	Port     string
+	Path     string // e.g. "/"
+	OpenType string // "iframe" / ...
+	// ServiceName is the daemon's appServiceInfo.serviceName
+	// (e.g. "Gitea.Application"). The fnOS web UI shell opens apps BY THIS
+	// KEY (native App Center 打开 button: He(appServiceInfo.serviceName)), so
+	// the store's in-shell "打开" passes it to the bridge openApp().
+	ServiceName string
+}
+
+// HasURL reports whether the app exposes an openable web entry on its own
+// port (the common case: service_port in the manifest).
+func (w WebService) HasURL() bool {
+	return w.Port != ""
+}
+
+// HasWebUIPath reports whether the app's web entry is served BY the fnOS web
+// UI itself (port 5666): urls.port empty, urls.path set — measured for
+// fn-knock /cgi/ThirdParty/fn-knock/index.cgi/ and the fndepot /app/fndepot
+// micro-apps. The UI builds the URL as <store-host>:5666<path>.
+func (w WebService) HasWebUIPath() bool {
+	return w.Port == "" && w.Path != ""
+}
+
 // InstalledApp represents an app installed on this box, as reported by the
 // app-center daemon (preferred) or appcenter-cli (fallback).
 type InstalledApp struct {
@@ -26,6 +59,7 @@ type InstalledApp struct {
 	Source  string // "official" / "thirdparty"
 	Icon    string // daemon icon path, e.g. /app-center-static/icon/<app>/icon.png
 	Control AppControl
+	Web    WebService
 }
 
 // VolumeInfo represents an available installation volume.

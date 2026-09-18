@@ -5,6 +5,7 @@ import (
 	"fnos-store/internal/cache"
 	"fnos-store/internal/config"
 	"fnos-store/internal/core"
+	"fnos-store/internal/mirror"
 	"fnos-store/internal/platform"
 	"fnos-store/internal/scheduler"
 	"fnos-store/internal/source"
@@ -37,11 +38,20 @@ type Server struct {
 	lastCheck         time.Time
 	statusByApp       map[string]string
 	controlByApp      map[string]platform.AppControl
+	webByApp          map[string]platform.WebService
 	recommendedApps   []source.RecommendedApp
 	// customSources 是用户添加的 FnDepot 外部应用源；sourceStatus 记录
 	// 每个源最近一次抓取的应用数与错误（按源 ID 索引）。
 	customSources []*source.FNDepotSource
 	sourceStatus  map[string]sourceStatusInfo
+
+	// mirrorMon 是 GitHub 加速源健康监测器（智能排序 + 自动切换），
+	// 由 startMirrorMonitor 在启动时创建。
+	mirrorMon *mirror.Monitor
+	// dockerMirrorMon 是 Docker 镜像加速健康监测器（同构，独立计数）。
+	dockerMirrorMon *mirror.Monitor
+	ctx       context.Context
+	cancel    context.CancelFunc
 
 	mu               sync.RWMutex
 	refreshDebouncer *refreshDebouncer
@@ -97,11 +107,13 @@ func NewServer(cfg Config) *Server {
 		staticFS:         cfg.StaticFS,
 		statusByApp:      make(map[string]string),
 		controlByApp:     make(map[string]platform.AppControl),
+		webByApp:         make(map[string]platform.WebService),
 		refreshDebouncer: &refreshDebouncer{},
 		sourceStatus:     make(map[string]sourceStatusInfo),
 	}
 	s.routes()
 	s.rebuildCustomSources()
+	s.startMirrorMonitor()
 	// 首次刷新放后台：源列表自动同步（首跑要验证几十个仓库）+ 目录抓取
 	// 可能耗时数分钟，不能阻塞 HTTP 监听。UI 先出骨架/「检查中」，数据就绪后
 	// SSE/轮询自然补齐。scheduler 的即时首查由 lastCheck 防重。
@@ -111,6 +123,9 @@ func NewServer(cfg Config) *Server {
 }
 
 func (s *Server) routes() {
+	// 诊断端点：真机上刷新卡住/慢时抓 goroutine 栈与 profile。
+	// 内网端口（默认 8011 仅 LAN 可达），无需鉴权但仅限本机/局域网。
+	s.mountPprof()
 	s.Mux.HandleFunc("GET /api/apps", s.handleListApps)
 	s.Mux.HandleFunc("GET /api/recommended", s.handleListRecommended)
 	s.Mux.HandleFunc("POST /api/apps/{appname}/install", s.handleInstall)
@@ -139,6 +154,8 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("GET /api/store-update", s.handleGetStoreUpdate)
 	s.Mux.HandleFunc("POST /api/store-update", s.handlePostStoreUpdate)
 	s.Mux.HandleFunc("POST /api/mirrors/check", s.handleCheckMirrors)
+	s.Mux.HandleFunc("GET /api/mirrors/health", s.handleMirrorHealth)
+	s.Mux.HandleFunc("GET /api/mirrors/docker/health", s.handleDockerMirrorHealth)
 	s.Mux.HandleFunc("/", s.handleSPA)
 }
 

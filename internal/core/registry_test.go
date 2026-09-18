@@ -91,6 +91,46 @@ func TestMergeUpdateStatus(t *testing.T) {
 			wantRevisionFlag: false,
 			wantInstalledFpk: "",
 		},
+		{
+			// 2026-09-18 live case (test box): wb2api installed 1.9.2 from a
+			// V2 custom source, catalog now 1.10.0, no fpk_version in the
+			// installed INI manifest. Must light the badge (the dock used to
+			// stay at 0 because the scan dropped non-conversun manifests).
+			name:             "external source app behind catalog (no fpk_version)",
+			local:            &Manifest{AppName: "wb2api", Version: "1.9.2", Distributor: "shuangji66"},
+			remote:           source.RemoteApp{AppName: "wb2api", Version: "1.10.0", FpkVersion: "1.10.0", Source: "shuangji66的应用源"},
+			wantStatus:       AppStatusUpdateAvailable,
+			wantRevisionFlag: false,
+			wantInstalledFpk: "",
+		},
+		{
+			// Multi-digit segment: 1.9.2 < 1.10.0 (numeric, not lexicographic).
+			name:             "multi-digit segment compares numerically",
+			local:            &Manifest{AppName: "node", Version: "24.15.0-1"},
+			remote:           source.RemoteApp{AppName: "node", Version: "24.19.0", FpkVersion: "24.19.0"},
+			wantStatus:       AppStatusUpdateAvailable,
+			wantRevisionFlag: false,
+			wantInstalledFpk: "",
+		},
+		{
+			// Installed version without numeric content cannot be compared:
+			// stay quiet instead of badge-everything.
+			name:             "non-numeric installed version stays up to date",
+			local:            &Manifest{AppName: "someref", Version: "latest"},
+			remote:           source.RemoteApp{AppName: "someref", Version: "1.0.0", FpkVersion: "1.0.0"},
+			wantStatus:       AppStatusInstalledUpToDate,
+			wantRevisionFlag: false,
+			wantInstalledFpk: "",
+		},
+		{
+			// Pre-release suffix carries the distinguishing digits: rc.37 < rc.38.
+			name:             "prerelease suffix bump detected",
+			local:            &Manifest{AppName: "new-api", Version: "1.0.0-rc.37", Distributor: "Blue-Mink"},
+			remote:           source.RemoteApp{AppName: "new-api", Version: "1.0.0-rc.38", FpkVersion: "1.0.0-rc.38", Source: "BlueMink"},
+			wantStatus:       AppStatusUpdateAvailable,
+			wantRevisionFlag: false,
+			wantInstalledFpk: "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -166,7 +206,7 @@ func TestMergeOnlyReturnsCatalogApps(t *testing.T) {
 func TestReconcileInstalledFromDaemon(t *testing.T) {
 	r := NewRegistry()
 	r.Merge([]Manifest{
-		{AppName: "scanned-app", Version: "1.0.0", FpkVersion: "1.0.0", Distributor: conversunDistributorTag},
+		{AppName: "scanned-app", Version: "1.0.0", FpkVersion: "1.0.0", Distributor: "conversun"},
 	}, []source.RemoteApp{
 		{AppName: "daidai-panel", Version: "3.0.10", FpkVersion: "3.0.10"},
 		{AppName: "scanned-app", Version: "1.0.0", FpkVersion: "1.0.0"},

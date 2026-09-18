@@ -1,4 +1,5 @@
 import { apiUrl } from './base';
+import { formatCount } from '../lib/utils';
 
 export interface AppInfo {
   /** 注册表内部键（外部源应用为 appname@源名）；同名应用共存时用它做唯一标识。 */
@@ -32,11 +33,27 @@ export interface AppInfo {
   start_stop?: boolean;
   /** daemon 能力位：是否可卸载。缺省按可卸载处理。 */
   uninstallable?: boolean;
+  /**
+   * 已安装应用的可打开 Web 入口（daemon appServiceInfo，与应用中心"打开"同源）。
+   * web_url 在 daemon 提供了 host 时为完整 URL；否则用 web_protocol/web_port/
+   * web_path 由前端按当前访问主机拼出（直达 :8011 或 Web UI 内嵌 iframe 均成立）。
+   */
+  web_protocol?: string;
+  web_url?: string;
+  web_port?: number;
+  web_path?: string;
+  /** Web 入口由 fnOS Web UI 自身服务（:5666 + web_path），无独立端口。 */
+  web_on_webui?: boolean;
+  /** daemon appServiceInfo.serviceName（如 "Gitea.Application"）：
+   *  内嵌 fnOS Web UI 时"打开"走壳窗口 openApp(serviceName) 在壳内打开。 */
+  web_service_name?: string;
   service_port?: number;
   homepage?: string;
   icon_url?: string;
   updated_at?: string;
   download_count?: number;
+  /** 本机安装/更新次数（第三方源应用无全局下载量时回退展示「本机 N 次」）。 */
+  local_installs?: number;
   app_type?: string;
   category?: string;
   post_install_note?: string;
@@ -64,8 +81,44 @@ export const installedVersionLabel = (app: AppInfo): string =>
   app.installed_fpk_version || app.installed_version;
 
 /** The version an update would move the app TO. */
+/**
+ * 下载量展示回退链：全局 download_count（fnos-apps 官方/源提供）→
+ * 本机安装次数（第三方源应用无全局数据，官方规范不统计外部源下载量）→ 版本。
+ */
+export const appDownloadLabel = (app: AppInfo): string | null => {
+  if (app.download_count != null && app.download_count > 0) {
+    return formatCount(app.download_count) + ' 次下载';
+  }
+  if (app.local_installs != null && app.local_installs > 0) {
+    return `本机 ${app.local_installs} 次`;
+  }
+  return null;
+};
+
 export const availableVersionLabel = (app: AppInfo): string =>
   app.available_version || app.latest_version;
+
+/**
+ * 已安装应用的"打开"目标 URL（等价于 fnOS 应用中心的"打开"按钮）。
+ * daemon 通常不带 host（实测 host 恒为空），此时按当前访问 store 的主机拼接：
+ * 用户从 http://<nas>:8011 直达，或在 fnOS Web UI 内嵌 iframe 使用，
+ * 两种情况下 location.hostname 都是 NAS 主机，拼出的地址一致。
+ * 无 Web 入口的应用返回 null（不渲染"打开"按钮）。
+ */
+export const appWebUrl = (app: AppInfo): string | null => {
+  if (!app.installed) return null;
+  if (app.web_url) return app.web_url;
+  const protocol = app.web_protocol || (window.location.protocol === 'https:' ? 'https' : 'http');
+  if (app.web_port) {
+    return `${protocol}://${window.location.hostname}:${app.web_port}${app.web_path || '/'}`;
+  }
+  // 入口由 fnOS Web UI 自身服务（fn-knock 的 /cgi/ThirdParty/...、
+  // fndepot 的 /app/fndepot 等）：按当前主机 + 5666 拼
+  if (app.web_on_webui && app.web_path) {
+    return `${protocol}://${window.location.hostname}:5666${app.web_path}`;
+  }
+  return null;
+};
 
 export interface AppsResponse {
   apps: AppInfo[];
@@ -349,6 +402,54 @@ export const checkMirrors = async (type?: 'github' | 'docker'): Promise<MirrorCh
   const response = await fetch(apiUrl(`/api/mirrors/check${params}`), { method: 'POST' });
   if (!response.ok) {
     throw new Error(`Failed to check mirrors: ${response.statusText}`);
+  }
+  return response.json();
+};
+
+/** 单个加速源的健康状态（来自后台周期探测 + 手动测速，服务端汇总）。 */
+export interface MirrorStat {
+  key: string;
+  label: string;
+  latency_ms: number;
+  status: 'ok' | 'fail' | '';
+  last_check: string;
+  consec_fails: number;
+}
+
+export interface MirrorSwitchInfo {
+  from: string;
+  to: string;
+  time: string;
+  reason: string;
+}
+
+/** GitHub 加速源健康监测快照（智能监测 + 自动切换）。 */
+export interface MirrorHealth {
+  mirrors: MirrorStat[];
+  /** 用户在设置里选定的镜像 key（auto = 智能模式） */
+  selected: string;
+  /** 当前实际生效的镜像 key（auto 时 = 最稳定源） */
+  active: string;
+  last_probe: string;
+  last_switch?: MirrorSwitchInfo | null;
+  interval_s: number;
+}
+
+export const fetchMirrorHealth = async (refresh = false): Promise<MirrorHealth> => {
+  const params = refresh ? '?refresh=1' : '';
+  const response = await fetch(apiUrl(`/api/mirrors/health${params}`));
+  if (!response.ok) {
+    throw new Error(`Failed to fetch mirror health: ${response.statusText}`);
+  }
+  return response.json();
+};
+
+/** Docker 镜像加速健康监测快照（与 GitHub 版同构）。 */
+export const fetchDockerMirrorHealth = async (refresh = false): Promise<MirrorHealth> => {
+  const params = refresh ? '?refresh=1' : '';
+  const response = await fetch(apiUrl(`/api/mirrors/docker/health${params}`));
+  if (!response.ok) {
+    throw new Error(`Failed to fetch docker mirror health: ${response.statusText}`);
   }
   return response.json();
 };

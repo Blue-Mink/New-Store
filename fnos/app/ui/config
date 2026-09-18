@@ -2,8 +2,8 @@
     ".url": {
         "fnos-apps-store.Application": 
         {
-            "title": "fnOS Apps",
-            "desc": "fnOS Apps",
+            "title": "New Store",
+            "desc": "New Store",
             "icon": "images/{0}.png",
             "type": "iframe",
             "port": "8011",

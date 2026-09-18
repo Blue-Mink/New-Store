@@ -72,7 +72,8 @@ const v1FlatSample = `{
     "icon_url": "./global-radio/ICON.PNG",
     "readme_url": "./global-radio/README.md",
     "homepage": "https://github.com/moli-xia/global-radio",
-    "service_port": 32678
+    "service_port": 32678,
+    "download_count": 1234
   },
   "fn-knock": {
     "display_name": "敲门knock",
@@ -447,6 +448,9 @@ func TestDecodeFndepotApps_V1Flat(t *testing.T) {
 	}
 	if e.ServicePort != "32678" {
 		t.Errorf("service_port(数字) 应可入 string 字段: %q", e.ServicePort)
+	}
+	if e.DownloadCount != 1234 {
+		t.Errorf("可选 download_count 应解析: %d", e.DownloadCount)
 	}
 }
 

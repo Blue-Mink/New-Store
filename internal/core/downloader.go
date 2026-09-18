@@ -97,6 +97,17 @@ func (d *Downloader) Download(ctx context.Context, req DownloadRequest, progress
 	prefixedName := req.AppName + "-" + req.FileName
 	finalPath := filepath.Join(d.downloadDir, prefixedName)
 
+	// 缓存复用：安装向导预取（fetchWizard）已完整下载过同一 FPK 时直接复用，
+	// 避免大应用（100MB+）被下载两次。文件名含版本（如 jellyfin_12.1_x86.fpk），
+	// 版本变化 → 文件名变化 → 自然失效；24h TTL 兜底同文件名的静默重发布。
+	// 安装/更新完成后管道会删除该文件，不会无限堆积。
+	if st, err := os.Stat(finalPath); err == nil && st.Size() > 10*1024 && time.Since(st.ModTime()) < 24*time.Hour {
+		if progress != nil {
+			progress(st.Size(), st.Size())
+		}
+		return finalPath, nil
+	}
+
 	urls := req.URLs
 
 	if len(urls) == 0 {

@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"fnos-store/internal/config"
@@ -48,10 +49,28 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 
 		// daemon 能力位（未知时保持 nil，前端按宽松默认处理，兼容 CLI 回退场景）
 		var startStop, uninstallable *bool
+		var webProtocol, webURL, webPath, webServiceName string
+		var webPort int
+		var webOnWebUI bool
 		if app.Installed {
 			if ctrl, known := s.getRuntimeControl(app.AppName); known {
 				sv, uv := ctrl.IsStartStop, ctrl.IsUninstall
 				startStop, uninstallable = &sv, &uv
+			}
+			// 打开按钮的目标（与 fnOS 应用中心 appServiceInfo 同源）
+			if web, ok := s.getRuntimeWeb(app.AppName); ok {
+				webProtocol = web.Protocol
+				webPath = web.Path
+				webServiceName = web.ServiceName
+				if p, err := strconv.Atoi(web.Port); err == nil {
+					webPort = p
+				}
+				if web.Host != "" {
+					webURL = fmt.Sprintf("%s://%s:%s%s", web.Protocol, web.Host, web.Port, web.Path)
+				}
+				if web.HasWebUIPath() {
+					webOnWebUI = true
+				}
 			}
 		}
 
@@ -73,11 +92,18 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 			Status:              status,
 			StartStop:           startStop,
 			Uninstallable:       uninstallable,
+			WebProtocol:         webProtocol,
+			WebURL:              webURL,
+			WebPort:             webPort,
+			WebPath:             webPath,
+			WebOnWebUI:          webOnWebUI,
+			WebServiceName:      webServiceName,
 			ServicePort:         app.ServicePort,
 			Homepage:            app.HomepageURL,
 			IconURL:             app.IconURL,
 			UpdatedAt:           app.UpdatedAt,
 			DownloadCount:       app.DownloadCount,
+			LocalInstalls:       cfg.LocalInstalls[app.AppName],
 			AppType:             app.AppType,
 			Category:            app.Category,
 			PostInstallNote:     app.PostInstallNote,

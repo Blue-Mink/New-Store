@@ -68,6 +68,15 @@ func dockerPullCandidates(composeRef string, cfg config.Config) []string {
 			add(ref)
 		}
 	}
+	// auto 模式：本地 KSpeeder 的改写同样置顶（本地缓存毫秒级；
+	// 已降级=连续探测失败时跳过，让云镜像顶上）
+	if cfg.DockerMirror == "auto" && !config.DockerSmartDegraded("kspeeder") {
+		if m, ok := config.DockerMirrorByKey("kspeeder"); ok {
+			for _, ref := range config.RewriteRefsForMirror(m, canonical) {
+				add(ref)
+			}
+		}
+	}
 
 	prefixes := config.DockerFallbackPrefixes(cfg.DockerMirror, cfg)
 	// ...other mirrors' rewrites slot in before the trailing direct ref, so a
@@ -91,6 +100,10 @@ func dockerPullCandidates(composeRef string, cfg config.Config) []string {
 		if m.Key == cfg.DockerMirror {
 			continue
 		}
+		// 本地 KSpeeder 已降级（连续探测失败）时不再占链位
+		if m.Key == "kspeeder" && config.DockerSmartDegraded("kspeeder") {
+			continue
+		}
 		for _, ref := range config.RewriteRefsForMirror(m, canonical) {
 			add(ref)
 		}
@@ -105,6 +118,22 @@ func dockerPullCandidates(composeRef string, cfg config.Config) []string {
 // carries — the configured one first, then any other — leaving the canonical
 // ref each candidate re-prefixes from scratch.
 func stripDockerMirrorPrefix(image string, cfg config.Config) string {
+	// 本地 KSpeeder ref 还原为 docker.io canonical。两种形态：
+	//  1. 标准 registry 路径：127.0.0.1:5443/library/busybox（官方镜像带
+	//     library/ 段，需剥掉后补 docker.io/）
+	//  2. 模板拼接：compose 用 ${DOCKER_MIRROR}docker.io/x/y 时，KSPEEDER
+	//     前缀后已是完整 canonical（rest 以 docker.io/ 开头，原样返回，
+	//     不能再补 docker.io/，否则双重化）
+	if strings.HasPrefix(image, config.KSpeederPrefix) {
+		rest := image[len(config.KSpeederPrefix):]
+		if strings.HasPrefix(rest, "docker.io/") {
+			return rest
+		}
+		if strings.HasPrefix(rest, "library/") {
+			rest = rest[len("library/"):]
+		}
+		return "docker.io/" + rest
+	}
 	if selected := config.DockerMirrorPrefix(cfg.DockerMirror, cfg); selected != "" && strings.HasPrefix(image, selected) {
 		return image[len(selected):]
 	}

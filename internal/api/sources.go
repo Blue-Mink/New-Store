@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"fnos-store/internal/cache"
 	"fnos-store/internal/config"
 	"fnos-store/internal/source"
 )
@@ -351,18 +352,28 @@ func (s *Server) syncSourceList(ctx context.Context, refreshOnAdd bool) sourceLi
 		}
 	}
 
-	// 并发校验+添加：并发 4、单源预算 60s；配置写入由 sourcesMu 串行保护。
-	// 死链/非 FnDepot 仓库只计失败，不影响其它源。
+	// 并发校验+添加：并发 4、单源预算 20s（GitHub raw 404 秒回，20s 足够
+	// 覆盖镜像链；60s 会让 ~110 个死链仓库耗时 27 分钟并阻塞整个目录
+	// 检查，2026-09-18 测试机实测）。TTL 内验证失败过的仓库直接跳过。
+	var verifyFails map[string]time.Time
+	if s.cacheStore != nil {
+		verifyFails = s.cacheStore.LoadVerifyFails()
+	}
+	now := time.Now()
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	sem := make(chan struct{}, 4)
 	for _, u := range newURLs {
+		if verifyFails != nil && cache.VerifyFailSkip(verifyFails, u, now) {
+			res.Already++ // 近期失败过：跳过（不计错误，防 UI 刷屏）
+			continue
+		}
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(u string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			sctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
 			entry, ok, addErr := s.addOneSource(sctx, u, "")
 			mu.Lock()
@@ -380,6 +391,9 @@ func (s *Server) syncSourceList(ctx context.Context, refreshOnAdd bool) sourceLi
 					msg = addErr.Error()
 				}
 				res.Errors = append(res.Errors, u+": "+msg)
+				if s.cacheStore != nil {
+					s.cacheStore.RecordVerifyFail(u)
+				}
 			}
 		}(u)
 	}

@@ -24,7 +24,8 @@ const ProgressOverlay: React.FC<ProgressOverlayProps> = ({ visible, message, pro
   return (
     <Dialog open={visible} onOpenChange={() => {}}>
       <DialogContent 
-        className="sm:max-w-sm [&>button]:hidden" 
+        // 与其他 App Store 卡片统一：18px 圆角 + 卡片边框/阴影（sm:rounded-[18px] 来自 ui/dialog 基础类）
+        className="sm:max-w-sm rounded-[18px] border-border/20 shadow-appstore bg-card [&>button]:hidden" 
         onInteractOutside={(e) => e.preventDefault()}
         onEscapeKeyDown={(e) => e.preventDefault()}
       >

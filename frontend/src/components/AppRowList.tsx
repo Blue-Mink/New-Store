@@ -1,11 +1,11 @@
 import React from 'react';
 import type { AppInfo, AppOperation } from '../api/client';
-import { availableVersionLabel, installedVersionLabel } from '../api/client';
-import { cn, formatCount, formatSpeed, formatProgress } from '@/lib/utils';
+import { availableVersionLabel, installedVersionLabel, appWebUrl, appDownloadLabel } from '../api/client';
+import { cn, formatSpeed, formatProgress } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import {
-  Download, Package, Circle, Container, X, BellOff, Trash2, Globe, Play, Square, Loader2,
+  Download, Package, Circle, Container, X, BellOff, Globe,
 } from 'lucide-react';
 import { CheckCircle2, RefreshCw as UpdateIcon, Search } from 'lucide-react';
 import AppIcon from './AppIcon';
@@ -27,6 +27,8 @@ interface AppRowListProps {
   onDistributorFilter?: (distributor: string) => void;
   onControl?: (app: AppInfo, action: 'start' | 'stop') => void;
   controlling?: string | null;
+  /** 打开应用 Web UI（与 fnOS 应用中心"打开"按钮同目标） */
+  onOpenApp?: (app: AppInfo) => void;
 }
 
 const STATUS_TEXT: Record<string, string> = {
@@ -55,7 +57,7 @@ const statusColor = (s: string) =>
  * 的 e2e heading 选择器冲突（桌面布局下本组件 display:none）。
  */
 const AppRowList: React.FC<AppRowListProps> = ({
-  apps, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, appOperations, searchQuery, filterType, upgradeAllowed = true, onSourceFilter, onAuthorFilter, onDistributorFilter, onControl, controlling,
+  apps, onInstall, onUpdate, onDetail, onCancelOp, appOperations, searchQuery, filterType, upgradeAllowed = true, onSourceFilter, onAuthorFilter, onDistributorFilter, onOpenApp,
 }) => {
   if (apps.length === 0) {
     const emptyText = searchQuery?.trim()
@@ -78,9 +80,15 @@ const AppRowList: React.FC<AppRowListProps> = ({
         const operation = appOperations?.get(app.appname);
         const isInstalled = app.installed;
         const canUpdate = isInstalled && app.has_update;
-        // daemon 能力位：nostart 系统组件与不支持启停的应用不显示启停按钮
-        const canControl = isInstalled && !!onControl && (app.start_stop ?? true) && app.status !== 'nostart';
-        const controlBusy = app.status === 'starting' || app.status === 'stopping';
+        const downloadLabel = appDownloadLabel(app);
+        // "打开"目标：daemon appServiceInfo；无 Web 入口的应用不渲染按钮
+        const openUrl = isInstalled ? appWebUrl(app) : null;
+        // "打开"药丸：运行中且有 Web 入口；或处于可启动状态
+        //（停止时 daemon 不下发 web 字段，启动成功后由 handleOpenApp 重新解析目标）
+        const canOpen = isInstalled && !!onOpenApp && (
+          !!openUrl || ((app.start_stop ?? true) && app.status !== 'nostart' &&
+            (app.status === 'stopped' || app.status === 'starting' || app.status === 'stopping'))
+        );
         return (
           <div
             key={app.key || app.appname}
@@ -139,11 +147,11 @@ const AppRowList: React.FC<AppRowListProps> = ({
                 {canUpdate && (
                   <span className="text-primary">→ v{availableVersionLabel(app)}</span>
                 )}
-                {app.download_count != null && app.download_count > 0 && (
+                {downloadLabel && (
                   <>
                     <span className="text-muted-foreground/30">·</span>
                     <span className="inline-flex items-center gap-0.5">
-                      <Download className="h-3 w-3" />{formatCount(app.download_count)}
+                      <Download className="h-3 w-3" />{downloadLabel}
                     </span>
                   </>
                 )}
@@ -187,8 +195,8 @@ const AppRowList: React.FC<AppRowListProps> = ({
               {/* 进行中的操作：紧凑进度条 */}
               {operation && (
                 <div className="mt-2 space-y-1.5">
-                  <Progress value={operation.progress} className="h-1.5" />
-                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <Progress value={operation.progress} className="h-1" />
+                  <div className="flex items-center justify-between text-xs text-muted-foreground tabular-nums">
                     <span className="min-w-0 truncate">
                       {operation.message}
                       {operation.step === 'downloading' && operation.speed != null && operation.speed > 0 && ` · ${formatSpeed(operation.speed)}`}
@@ -208,7 +216,7 @@ const AppRowList: React.FC<AppRowListProps> = ({
               )}
             </div>
 
-            {/* 右侧操作（App Store GET / UPDATE 药丸） */}
+            {/* 右侧操作（App Store 风格：未安装=GET / 有更新=UPDATE / 已安装=OPEN，单一药丸） */}
             {!operation && (
               <div className="shrink-0 flex flex-col items-end gap-1.5" onClick={e => e.stopPropagation()}>
                 {!isInstalled ? (
@@ -227,35 +235,15 @@ const AppRowList: React.FC<AppRowListProps> = ({
                   >
                     {upgradeAllowed ? '更新' : '需手动'}
                   </button>
+                ) : canOpen ? (
+                  <button
+                    onClick={() => onOpenApp(app)}
+                    aria-label={`打开 ${app.display_name}`}
+                    className="pill bg-primary text-primary-foreground h-7 px-4 text-[13px] font-semibold shadow-sm active:opacity-80"
+                  >
+                    打开
+                  </button>
                 ) : null}
-                {canControl && (
-                  <button
-                    onClick={() => onControl(app, app.status === 'running' ? 'stop' : 'start')}
-                    aria-label={controlBusy ? `${app.status === 'starting' ? '启动中' : '停用中'} ${app.display_name}` : `${app.status === 'running' ? '停用' : '启动'} ${app.display_name}`}
-                    title={controlBusy ? (app.status === 'starting' ? '启动中…' : '停用中…') : app.status === 'running' ? '停用' : '启动'}
-                    disabled={controlling !== null || controlBusy}
-                    className="p-1.5 rounded-full text-muted-foreground/60 hover:text-primary hover:bg-primary/10 disabled:opacity-50"
-                  >
-                    {controlling === app.appname || controlBusy ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : app.status === 'running' ? (
-                      <Square className="h-3.5 w-3.5 fill-current" />
-                    ) : (
-                      <Play className="h-3.5 w-3.5 fill-current" />
-                    )}
-                  </button>
-                )}
-                {isInstalled && onUninstall && (app.uninstallable ?? true) && (
-                  <button
-                    onClick={() => onUninstall(app)}
-                    aria-label={`卸载 ${app.display_name}`}
-                    title="卸载"
-                    disabled={controlling !== null}
-                    className="p-1.5 rounded-full text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 disabled:opacity-50"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                )}
               </div>
             )}
           </div>
@@ -265,4 +253,6 @@ const AppRowList: React.FC<AppRowListProps> = ({
   );
 };
 
-export default AppRowList;
+// memo：搜索输入（防抖前）/其他无关状态变化时，若 apps 引用与回调未变，
+// 跳过整棵行列表的重新渲染 —— WebView 输入流畅度的关键。
+export default React.memo(AppRowList);

@@ -32,11 +32,29 @@ type appResponse struct {
 	// case the UI must default to permissive — same as before these fields.
 	StartStop     *bool `json:"start_stop,omitempty"`
 	Uninstallable *bool `json:"uninstallable,omitempty"`
+	// Web* describe the installed app's openable web entry (daemon
+	// appServiceInfo) backing the "打开" button, like the native App Center.
+	// WebHost is usually empty: the UI fills in the host the user reached the
+	// store on. Absent when the app has no openable web UI.
+	WebProtocol string `json:"web_protocol,omitempty"`
+	WebURL      string `json:"web_url,omitempty"`
+	WebPort     int    `json:"web_port,omitempty"`
+	WebPath     string `json:"web_path,omitempty"`
+	// WebOnWebUI marks apps whose web entry is served by the fnOS web UI
+	// itself (port 5666): the UI builds <host>:5666+WebPath.
+	WebOnWebUI bool `json:"web_on_webui,omitempty"`
+	// WebServiceName is the daemon's appServiceInfo.serviceName
+	// (e.g. "Gitea.Application"). Embedded in the fnOS web UI, "打开" opens
+	// the app in-shell via the bridge openApp(serviceName) — exactly what the
+	// native App Center does (He(appServiceInfo.serviceName)).
+	WebServiceName string `json:"web_service_name,omitempty"`
 	ServicePort         int    `json:"service_port,omitempty"`
 	Homepage            string `json:"homepage,omitempty"`
 	IconURL             string `json:"icon_url,omitempty"`
 	UpdatedAt           string `json:"updated_at,omitempty"`
 	DownloadCount       int    `json:"download_count"`
+	// 本机安装/更新次数（第三方源应用无全局下载量时前端回退展示「本机 N 次」）
+	LocalInstalls       int    `json:"local_installs,omitempty"`
 	AppType             string `json:"app_type,omitempty"`
 	Category            string `json:"category,omitempty"`
 	PostInstallNote     string `json:"post_install_note,omitempty"`

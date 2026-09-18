@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import type { AppInfo } from '../api/client';
-import { availableVersionLabel } from '../api/client';
-import { cn, formatCount } from '../lib/utils';
+import { availableVersionLabel, appDownloadLabel } from '../api/client';
+import { cn } from '../lib/utils';
 import { ChevronRight, Flame, Clock } from 'lucide-react';
 
 interface FeaturedShowcaseProps {
@@ -34,7 +34,7 @@ const HeroBanner: React.FC<{ app: AppInfo; className?: string; onDetail: (a: App
         </div>
       )}
       <div className="min-w-0 pt-1">
-        <p className="text-[11px] font-medium uppercase tracking-widest text-white/70">编辑推荐</p>
+        <p className="text-[11px] font-medium uppercase tracking-widest text-white/70">推荐</p>
         <h3 className="mt-1 text-xl font-bold leading-tight truncate">{app.display_name}</h3>
         {tagline(app) && <p className="mt-1 text-[13px] text-white/80 line-clamp-2 leading-snug">{tagline(app)}</p>}
       </div>
@@ -63,22 +63,32 @@ const RowCard: React.FC<{ app: AppInfo; onDetail: (a: AppInfo) => void }> = ({ a
     )}
     <p className="mt-2 text-[13px] font-medium leading-tight truncate">{app.display_name}</p>
     <p className="mt-0.5 text-[11px] text-muted-foreground truncate">
-      {app.download_count ? formatCount(app.download_count) + ' 次下载' : `v${availableVersionLabel(app)}`}
+      {appDownloadLabel(app) ?? `v${availableVersionLabel(app)}`}
     </p>
   </button>
 );
 
 /**
  * 「发现」页顶部的 App Store Today 风格展示区：
- * 3 张渐变色横幅（下载量 Top3）+ 「热门应用」「最近更新」横向滚动行。
+ * 3 张渐变色横幅（编辑推荐：全目录随机 3 款）+ 「热门应用」「最近更新」横向滚动行。
  * 注意：应用名用 h3/p 而非可被 e2e 按 heading 命中的独立卡片结构，
  * 且容器不带 overflow-hidden，避免与 e2e 的 cardFor() 选择器冲突。
  */
 const FeaturedShowcase: React.FC<FeaturedShowcaseProps> = ({ apps, onDetail }) => {
-  const featured = useMemo(
-    () => [...apps].sort((a, b) => (b.download_count ?? 0) - (a.download_count ?? 0)).slice(0, 3),
-    [apps]
-  );
+  // 编辑推荐：从整个目录随机挑 3 款（优先带图标的，保证横幅视觉质量；
+  // 图标不足 3 个时退回全量池）。同一份目录内结果保持稳定（useMemo 只
+  // 依赖 apps），刷新页面后重新洗牌。
+  const featured = useMemo(() => {
+    const withIcon = apps.filter(a => a.icon_url);
+    const pool = withIcon.length >= 3 ? withIcon : apps;
+    const arr = [...pool];
+    const out: AppInfo[] = [];
+    while (out.length < 3 && arr.length > 0) {
+      const j = Math.floor(Math.random() * arr.length);
+      out.push(arr.splice(j, 1)[0]);
+    }
+    return out;
+  }, [apps]);
   const popular = useMemo(
     () => [...apps].sort((a, b) => (b.download_count ?? 0) - (a.download_count ?? 0)).slice(0, 12),
     [apps]
@@ -92,14 +102,18 @@ const FeaturedShowcase: React.FC<FeaturedShowcaseProps> = ({ apps, onDetail }) =
 
   return (
     <div className="space-y-8">
-      {/* 横幅区：首张占两列 */}
+      {/* 横幅区：首张占两列；3 张时第三张独占整行（桌面端避免单独一格留两空格） */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {featured.map((app, i) => (
           <HeroBanner
             key={app.appname}
             app={app}
             onDetail={onDetail}
-            className={cn(GRADIENTS[i % GRADIENTS.length], i === 0 && 'md:col-span-2')}
+            className={cn(
+              GRADIENTS[i % GRADIENTS.length],
+              i === 0 && 'md:col-span-2',
+              featured.length === 3 && i === 2 && 'md:col-span-3'
+            )}
           />
         ))}
       </div>
@@ -131,4 +145,5 @@ const FeaturedShowcase: React.FC<FeaturedShowcaseProps> = ({ apps, onDetail }) =
   );
 };
 
-export default FeaturedShowcase;
+// memo：apps 引用与 onDetail 未变时跳过重渲染（搜索打字等高频场景）
+export default React.memo(FeaturedShowcase);

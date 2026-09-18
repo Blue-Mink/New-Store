@@ -158,12 +158,19 @@ func (r *Registry) Merge(local []Manifest, remote []source.RemoteApp, installedT
 				}
 				app.HasRevisionUpdate = false
 			} else {
-				// Fallback to existing logic: version comparison + installedTags + revision check
-				versionCmp := CompareVersions(localManifest.Version, item.Version)
-				installedTag := installedTags[item.AppName]
-				revisionUpdate := versionCmp == 0 && installedTag != item.ReleaseTag && hasRevisionUpdate(item.ReleaseTag, localManifest.Version)
-				if versionCmp < 0 || revisionUpdate {
-					app.Status = AppStatusUpdateAvailable
+				// Fallback to existing logic: version comparison + installedTags + revision check.
+				// 已装版本不含任何非零数字段（"latest"/"dev" 等）时无法比较，
+				// 保守视为最新，避免误报「有更新」。
+				revisionUpdate := false
+				if versionHasNumeric(localManifest.Version) {
+					versionCmp := CompareVersions(localManifest.Version, item.Version)
+					installedTag := installedTags[item.AppName]
+					revisionUpdate = versionCmp == 0 && installedTag != item.ReleaseTag && hasRevisionUpdate(item.ReleaseTag, localManifest.Version)
+					if versionCmp < 0 || revisionUpdate {
+						app.Status = AppStatusUpdateAvailable
+					} else {
+						app.Status = AppStatusInstalledUpToDate
+					}
 				} else {
 					app.Status = AppStatusInstalledUpToDate
 				}
@@ -175,6 +182,11 @@ func (r *Registry) Merge(local []Manifest, remote []source.RemoteApp, installedT
 		result = append(result, app)
 	}
 
+	// 内容级去重：跨源（含内置目录）同名（忽略大小写）+ 同 SHA256 = 同一份包，
+	// 只保留元数据最全的一个；sha256 缺失的条目无法证明同一性，全部保留
+	// （不同开发者/不同构建由用户按详情页的开发者与哈希自行区分）。
+	result = dedupeIdenticalApps(result)
+
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].UpdatedAt != result[j].UpdatedAt {
 			return result[i].UpdatedAt > result[j].UpdatedAt
@@ -185,6 +197,61 @@ func (r *Registry) Merge(local []Manifest, remote []source.RemoteApp, installedT
 	r.updatedAt = time.Now()
 	r.lastResult = result
 	return result
+}
+
+// dedupePriority 决定同一份包保留哪个目录条目：元数据更完整者胜
+// （有精确包大小 > 来源等级[内置目录 > 应用中心镜像 > 任意外部源] > 有下载量）。
+func dedupePriority(app AppInfo) int {
+	p := 0
+	if app.SizeBytes > 0 {
+		p += 4
+	}
+	switch app.Source {
+	case "fnos-apps":
+		p += 2
+	case "fnOS应用中心":
+		p += 1
+	}
+	if app.DownloadCount > 0 {
+		p += 1
+	}
+	return p
+}
+
+// dedupeIdenticalApps 移除跨源重复收录的同一份包。
+// 判定依据是 SHA256（内容同一性的硬证据）；同分保留先出现的条目。
+func dedupeIdenticalApps(apps []AppInfo) []AppInfo {
+	type groupKey struct{ name, sha string }
+	winners := make(map[groupKey]int)
+	for i, app := range apps {
+		if app.SHA256 == "" {
+			continue
+		}
+		gk := groupKey{strings.ToLower(app.AppName), app.SHA256}
+		if cur, ok := winners[gk]; !ok || dedupePriority(app) > dedupePriority(apps[cur]) {
+			winners[gk] = i
+		}
+	}
+	drop := make(map[int]bool)
+	for i, app := range apps {
+		if app.SHA256 == "" {
+			continue
+		}
+		gk := groupKey{strings.ToLower(app.AppName), app.SHA256}
+		if winners[gk] != i {
+			drop[i] = true
+		}
+	}
+	if len(drop) == 0 {
+		return apps
+	}
+	out := make([]AppInfo, 0, len(apps)-len(drop))
+	for i, app := range apps {
+		if !drop[i] {
+			out = append(out, app)
+		}
+	}
+	return out
 }
 
 func (r *Registry) List() []AppInfo {

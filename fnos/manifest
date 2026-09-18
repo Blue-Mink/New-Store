@@ -1,6 +1,6 @@
 appname         = fnos-apps-store
-version         = 1.14.0
-display_name    = fnOS Apps
+version = 1.19.2
+display_name    = New Store
 platform        = x86
 maintainer      = conversun
 maintainer_url  = https://github.com/conversun
@@ -13,3 +13,4 @@ beta            = no
 desc            = fnOS第三方应用中心，支持一键安装、更新和卸载来自conversun/fnos-apps的所有应用。
 source          = thirdparty
 checksum        = 
+micro_app       = true

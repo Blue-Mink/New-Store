@@ -917,6 +917,18 @@ func (p *installPipeline) runStandard(ctx context.Context, stream *sseStream, op
 		p.cacheStore.SetInstalledTag(app.AppName, app.ReleaseTag)
 	}
 
+	// 本机下载次数 +1（安装/更新都走这里，对应一次 FPK 下载）。
+	// FnDepot 外部源应用无全局下载量（官方规范不统计/不上报），
+	// 前端在 download_count 缺失时用 local_installs 回退展示。
+	if p.configMgr != nil {
+		local := p.configMgr.Get()
+		if local.LocalInstalls == nil {
+			local.LocalInstalls = make(map[string]int)
+		}
+		local.LocalInstalls[app.AppName]++
+		_ = p.configMgr.SaveConfig(local)
+	}
+
 	_ = refreshFn(ctx)
 
 	newVersion := expectedVersion
@@ -1039,7 +1051,9 @@ func (p *installPipeline) fetchWizard(ctx context.Context, app core.AppInfo) (*p
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(fpkPath)
+	// 故意不删：紧接着的安装会经 Downloader 的缓存复用直接拿到这份 FPK，
+	// 省掉大应用（100MB+）的整包二次下载。安装/更新完成后管道自会删除；
+	// 用户取消安装则文件留 24h 后由缓存 TTL 自然失效。
 
 	// Staging drives the daemon exactly as an install does, so it takes the same
 	// lock. Without this a wizard preview can stage concurrently with a live

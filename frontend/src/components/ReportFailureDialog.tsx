@@ -86,7 +86,7 @@ export function ReportFailureDialog({ open, onClose, app, step, errorMessage }: 
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContent className="sm:max-w-[600px]">
+      <DialogContent className="rounded-[18px] sm:max-w-[600px] border-border/20 shadow-appstore bg-card">
         <DialogHeader>
           <DialogTitle>应用操作失败</DialogTitle>
           <DialogDescription>

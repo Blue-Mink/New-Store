@@ -191,7 +191,7 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
           {syncingList ? '同步中…' : '立即同步源列表'}
         </Button>
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          从内置社区源列表自动发现并添加新应用源，单次最多添加 150 个；抓取走设置的 GitHub 加速镜像链。
+          从内置社区源列表自动发现并添加新应用源；抓取走设置的 GitHub 加速镜像链。
         </p>
       </div>
 
@@ -294,7 +294,7 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
         />
         <div className="flex items-center justify-between gap-2">
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            FnDepot V1/V2：JSON 直链或 GitHub 仓库。源名自动取仓库作者名。
+            FnDepot V1/V2：JSON 直链或 GitHub 仓库。源名自动取仓库作者名。单次最多添加 150 个。
           </p>
           <Button size="sm" onClick={handleAdd} disabled={adding || lines.length === 0} className="h-8 shrink-0">
             {adding ? (

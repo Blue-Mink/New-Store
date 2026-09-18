@@ -181,3 +181,22 @@
 .hero-gradient-3 {
   background: linear-gradient(135deg, #f59e0b 0%, #f97316 45%, #ef4444 100%);
 }
+
+/* 顶部搜索展开动画：点击"搜索"药丸后，全宽搜索框从右侧（药丸位置）悬浮展开 */
+@keyframes search-expand {
+  from { opacity: 0; transform: translateY(-10px) scale(0.92); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.search-expand-anim {
+  animation: search-expand 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: 75% 0%;
+}
+
+/* 灯箱换图：方向感知滑入（消除生硬跳切）。无 fill —— 动画结束后回到
+   元素自身的 opacity/transform（loading 态的 opacity-0 依然有效） */
+@keyframes lightbox-in-next { from { opacity: 0; transform: translateX(28px); } }
+@keyframes lightbox-in-prev  { from { opacity: 0; transform: translateX(-28px); } }
+@keyframes lightbox-in-open  { from { opacity: 0; transform: scale(0.96); } }
+.lightbox-anim-next { animation: lightbox-in-next 180ms cubic-bezier(0.22, 1, 0.36, 1); }
+.lightbox-anim-prev  { animation: lightbox-in-prev  180ms cubic-bezier(0.22, 1, 0.36, 1); }
+.lightbox-anim-open  { animation: lightbox-in-open  200ms cubic-bezier(0.22, 1, 0.36, 1); }

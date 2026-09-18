@@ -81,14 +81,19 @@ const WizardDialog: React.FC<WizardDialogProps> = ({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onCancel()}>
-      <DialogContent className="sm:max-w-md max-h-[calc(100dvh-2rem)] flex flex-col">
+      <DialogContent className="rounded-[18px] sm:max-w-md max-h-[calc(100dvh-2rem)] flex flex-col border-border/20 shadow-appstore bg-card">
         <DialogHeader className="shrink-0">
           <DialogTitle>安装 {appDisplayName}</DialogTitle>
         </DialogHeader>
 
         {loading ? (
-          <div className="flex justify-center py-8">
+          <div className="flex flex-col items-center gap-3 py-8">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            <p className="text-xs text-muted-foreground text-center leading-relaxed">
+              正在预取安装包并读取安装选项…
+              <br />
+              较大应用需要几分钟，安装包会在安装时直接复用
+            </p>
           </div>
         ) : (
           <div className="space-y-4 py-2 overflow-y-auto flex-1 min-h-0">

@@ -1010,7 +1010,8 @@ func TestDockerPullCandidates(t *testing.T) {
 			"docker.1panel.live/xream/sub-store:2.36.35",
 			"dockerproxy.net/xream/sub-store:2.36.35",
 			"registry.cyou/xream/sub-store:2.36.35",
-			"docker.io/xream/sub-store:2.36.35", // direct, always last
+			"127.0.0.1:5443/xream/sub-store:2.36.35", // local KSpeeder rewrite slots in before direct
+			"docker.io/xream/sub-store:2.36.35",      // direct, always last
 		}
 		if len(got) != len(want) {
 			t.Fatalf("len = %d, want %d: %v", len(got), len(want), got)
@@ -1065,20 +1066,96 @@ func TestDockerPullCandidates(t *testing.T) {
 		}
 	})
 
-	t.Run("NJU selection leads ghcr with its rewrite and docker.io with direct", func(t *testing.T) {
+	t.Run("NJU selection leads ghcr with its rewrite and docker.io with mirror chain", func(t *testing.T) {
 		cfg := config.Config{DockerMirror: "nju-ghcr"}
 		ghcr := dockerPullCandidates("ghcr.io/paperless-ngx/paperless-ngx:3.1.1", cfg)
 		if len(ghcr) == 0 || ghcr[0] != "ghcr.nju.edu.cn/paperless-ngx/paperless-ngx:3.1.1" {
 			t.Errorf("ghcr first candidate = %v, want the NJU rewrite shape", ghcr)
 		}
+		// NJU 无 URL（host 改写型）不进前缀链：docker.io 镜像走真实镜像
+		// 回退链（声明序，无监测钩子时），直连 docker.io 沉底兜底。
 		dockerio := dockerPullCandidates("docker.io/xream/sub-store:2.36.35", cfg)
-		if len(dockerio) == 0 || dockerio[0] != "docker.io/xream/sub-store:2.36.35" {
-			t.Errorf("docker.io first candidate = %v, want the direct ref (NJU serves no docker.io)", dockerio)
+		if len(dockerio) == 0 || dockerio[0] != "m.daocloud.io/docker.io/xream/sub-store:2.36.35" {
+			t.Errorf("docker.io first candidate = %v, want the first real mirror (NJU serves no docker.io)", dockerio)
+		}
+		if dockerio[len(dockerio)-1] != "docker.io/xream/sub-store:2.36.35" {
+			t.Errorf("docker.io last candidate = %v, want the direct ref", dockerio)
 		}
 		for _, c := range dockerio {
 			if c == "ghcr.nju.edu.cn/docker.io/xream/sub-store:2.36.35" {
 				t.Errorf("candidate %q misapplies the ghcr rewrite to a docker.io ref", c)
 			}
+		}
+	})
+
+	t.Run("KSpeeder selection leads with its local registry ref", func(t *testing.T) {
+		cfg := config.Config{DockerMirror: "kspeeder"}
+		got := dockerPullCandidates("docker.io/busybox:latest", cfg)
+		if len(got) == 0 || got[0] != "127.0.0.1:5443/library/busybox:latest" {
+			t.Errorf("first candidate = %v, want the kspeeder local ref", got)
+		}
+		if got[len(got)-1] != "docker.io/busybox:latest" {
+			t.Errorf("last candidate = %v, want the direct ref", got)
+		}
+		// ghcr 镜像：kspeeder 无改写，链首应为真实镜像
+		ghcr := dockerPullCandidates("ghcr.io/x/y:1", cfg)
+		if len(ghcr) == 0 || strings.HasPrefix(ghcr[0], "127.0.0.1:5443/") {
+			t.Errorf("ghcr first candidate = %v, kspeeder must not handle ghcr", ghcr)
+		}
+	})
+
+	t.Run("auto mode leads with healthy kspeeder, skips degraded", func(t *testing.T) {
+		healthy := config.Config{DockerMirror: "auto"}
+		got := dockerPullCandidates("docker.io/busybox:latest", healthy)
+		if len(got) == 0 || got[0] != "127.0.0.1:5443/library/busybox:latest" {
+			t.Errorf("auto healthy: first candidate = %v, want kspeeder local ref first", got)
+		}
+
+		config.RegisterDockerSmart(config.DockerSmart{
+			Rank:     func(cfg config.Config) []string { return nil },
+			Best:     func(cfg config.Config) string { return "m.daocloud.io/" },
+			Degraded: func(key string) bool { return key == "kspeeder" },
+		})
+		defer config.RegisterDockerSmart(config.DockerSmart{})
+
+		got = dockerPullCandidates("docker.io/busybox:latest", healthy)
+		for _, c := range got {
+			if strings.HasPrefix(c, "127.0.0.1:5443/") {
+				t.Fatalf("auto degraded: kspeeder ref must be excluded from chain: %v", got)
+			}
+		}
+	})
+
+	t.Run("kspeeder-prefixed compose ref strips back to docker.io canonical", func(t *testing.T) {
+		cfg := config.Config{DockerMirror: "kspeeder"}
+		cases := map[string]string{
+			"127.0.0.1:5443/library/busybox:latest":       "docker.io/busybox:latest",
+			"127.0.0.1:5443/linuxserver/radarr:10.8.3":    "docker.io/linuxserver/radarr:10.8.3",
+			// ${DOCKER_MIRROR}docker.io/x/y 模板形态：rest 已是完整 canonical，
+			// 不能再补 docker.io/（双重化会让全链失效）
+			"127.0.0.1:5443/docker.io/wisdomsky/cloudflared-web:2026.9.1": "docker.io/wisdomsky/cloudflared-web:2026.9.1",
+		}
+		for in, want := range cases {
+			if got := stripDockerMirrorPrefix(in, cfg); got != want {
+				t.Errorf("stripDockerMirrorPrefix(%q) = %q, want %q", in, got, want)
+			}
+		}
+	})
+
+	t.Run("kspeeder template-shaped compose ref yields clean chain", func(t *testing.T) {
+		// auto + kspeeder 最稳：${DOCKER_MIRROR} 模板替换后的 ref 走完整链
+		cfg := config.Config{DockerMirror: "auto"}
+		got := dockerPullCandidates("127.0.0.1:5443/docker.io/wisdomsky/cloudflared-web:2026.9.1", cfg)
+		if len(got) == 0 || got[0] != "127.0.0.1:5443/wisdomsky/cloudflared-web:2026.9.1" {
+			t.Errorf("first candidate = %v, want the clean kspeeder ref", got)
+		}
+		for _, c := range got {
+			if strings.Contains(c, "docker.io/docker.io/") {
+				t.Fatalf("doubled docker.io leaked into chain: %v", got)
+			}
+		}
+		if got[len(got)-1] != "docker.io/wisdomsky/cloudflared-web:2026.9.1" {
+			t.Errorf("last candidate = %v, want the clean direct ref", got)
 		}
 	})
 }

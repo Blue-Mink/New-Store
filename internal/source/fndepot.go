@@ -98,6 +98,9 @@ type fndepotAppEntry struct {
 	DistributorURL string          `json:"distributor_url"`
 	BugReportURL  string          `json:"bug_report_url"`
 	Homepage      string          `json:"homepage"`
+	// 可选：FnDepot 官方规范声明外部源不统计下载量，但源提供该字段时
+	// （V1 平铺 / V2 apps 均可）解析并展示；缺失时前端回退本地安装次数。
+	DownloadCount int             `json:"download_count,omitempty"`
 	IsDocker      bool            `json:"is_docker"`
 	ServicePort   fndepotServicePort `json:"service_port"`
 	Releases      map[string]fndepotRelease `json:"releases"`
@@ -417,6 +420,10 @@ func (s *FNDepotSource) FetchApps(ctx context.Context) ([]RemoteApp, error) {
 			return nil, err
 		}
 		req.Header.Set("User-Agent", "fnos-store/1.x")
+		// 公共镜像 CDN 可能缓存旧版 manifest（实测同一刷新周期内版本在
+		// 新旧两份之间跳动）→ 源清单必须禁用缓存。
+		req.Header.Set("Cache-Control", "no-cache")
+		req.Header.Set("Pragma", "no-cache")
 		resp, err := s.httpClient.Do(req)
 		if err != nil {
 			cancel()
@@ -562,6 +569,13 @@ func translateFndepotApp(appName string, entry fndepotAppEntry, baseURL, sourceN
 		return RemoteApp{}, false
 	}
 
+	// 源 manifest 没给 updated_at（V1 平铺源全部缺失、V2 部分 release 缺失）时，
+	// 从下载链接的 release 标签里解析发布日期（如 .../releases/download/
+	// 2026.09.16-1052/xxx.fpk → 2026-09-16 10:52），让「最近更新」有值可显示。
+	if sel.updatedAt == "" {
+		sel.updatedAt = DateFromReleaseURL(sel.download)
+	}
+
 	port := 0
 	if ps := strings.TrimSpace(string(entry.ServicePort)); ps != "" {
 		if n, err := strconv.Atoi(ps); err == nil {
@@ -597,6 +611,7 @@ func translateFndepotApp(appName string, entry fndepotAppEntry, baseURL, sourceN
 		Platforms:      []string{current},
 		FpkURL:         resolveAgainst(baseURL, sel.download),
 		IconURL:        resolveAgainst(baseURL, entry.IconURL),
+		DownloadCount:  entry.DownloadCount,
 		AppType:        appTypeOf(isDocker),
 		Category:       mapFndepotCategory(cats),
 		Source:         sourceName,
@@ -668,6 +683,44 @@ func sourceNameFromURL(u string) string {
 }
 
 // sortByVersionDesc 按版本号降序（SemVer 风格，非数字段回退 0）。
+// releaseTagDateRE 匹配日期（可选 HHMM 时间）：2026.09.16 / 2026-09-16 / 20260916，
+// 时间形如 2026.09.16-1052 / 20260916_1052。
+var releaseTagDateRE = regexp.MustCompile(`(?i)(20\d{2})[.\-/]?(\d{1,2})[.\-/]?(\d{1,2})(?:[-_T ](\d{1,2})(\d{2}))?`)
+
+// DateFromReleaseURL 从下载 URL 的 release 标签解析发布日期，返回 RFC3339
+// （按 +08:00 时区，国内源惯例）；解析不出返回空串。
+// 优先解析 "releases/download/<tag>/<file>" 的 tag 段，避免误匹配文件名里的数字。
+func DateFromReleaseURL(rawURL string) string {
+	tag := rawURL
+	if i := strings.Index(rawURL, "/releases/download/"); i >= 0 {
+		rest := rawURL[i+len("/releases/download/"):]
+		if j := strings.LastIndex(rest, "/"); j > 0 {
+			tag = rest[:j]
+		}
+	}
+	m := releaseTagDateRE.FindStringSubmatch(tag)
+	if m == nil {
+		return ""
+	}
+	year, _ := strconv.Atoi(m[1])
+	month, _ := strconv.Atoi(m[2])
+	day, _ := strconv.Atoi(m[3])
+	if year < 2000 || year > 2099 || month < 1 || month > 12 || day < 1 || day > 31 {
+		return ""
+	}
+	hour, minute := 0, 0
+	if m[4] != "" {
+		hour, _ = strconv.Atoi(m[4])
+		minute, _ = strconv.Atoi(m[5])
+		if hour > 23 || minute > 59 {
+			hour, minute = 0, 0
+		}
+	}
+	// 标签里的时间按 +08:00 墙钟时间理解（国内源惯例），不做时区换算。
+	loc := time.FixedZone("CST", 8*3600)
+	return time.Date(year, time.Month(month), day, hour, minute, 0, 0, loc).Format(time.RFC3339)
+}
+
 func sortByVersionDesc(versions []string) {
 	sort.Slice(versions, func(i, j int) bool {
 		return compareFndepotVersions(versions[i], versions[j]) > 0

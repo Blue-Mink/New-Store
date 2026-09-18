@@ -686,6 +686,21 @@ type daemonApp struct {
 		IsUninstall bool `json:"isUninstall"`
 		Upgrade     bool `json:"upgrade"`
 	} `json:"control"`
+	// AppServiceInfo is the app's openable web entry, as the native App
+	// Center's "打开" button consumes it (measured shape on 1.2.0505:
+	// type "iframe" or "url", urls{protocol,host,port,path}, host usually
+	// empty). Absent for apps without a web UI.
+	AppServiceInfo struct {
+		Type     string `json:"type"`
+		URLs     struct {
+			Protocol string `json:"protocol"`
+			Host     string `json:"host"`
+			Port     string `json:"port"`
+			Path     string `json:"path"`
+		} `json:"urls"`
+		OpenType    string `json:"openType"`
+		ServiceName string `json:"serviceName"`
+	} `json:"appServiceInfo"`
 }
 
 // DaemonListInstalled asks the app-center daemon for its authoritative list of
@@ -705,6 +720,25 @@ func (a *LinuxAppCenter) DaemonListInstalled(ctx context.Context) ([]InstalledAp
 	}
 	apps := make([]InstalledApp, 0, len(resp.List))
 	for _, d := range resp.List {
+		w := WebService{
+			Protocol:    d.AppServiceInfo.URLs.Protocol,
+			Host:        d.AppServiceInfo.URLs.Host,
+			Port:        d.AppServiceInfo.URLs.Port,
+			Path:        d.AppServiceInfo.URLs.Path,
+			OpenType:    d.AppServiceInfo.OpenType,
+			ServiceName: d.AppServiceInfo.ServiceName,
+		}
+		if w.Protocol == "" {
+			w.Protocol = "http"
+		}
+		if w.Path == "" {
+			w.Path = "/"
+		}
+		// Only iframe/url entries are openable web UIs; everything else
+		// (native apps, headless services) stays without an "打开" target.
+		if d.AppServiceInfo.Type != "iframe" && d.AppServiceInfo.Type != "url" {
+			w = WebService{}
+		}
 		apps = append(apps, InstalledApp{
 			AppName:     d.AppName,
 			DisplayName: d.Name,
@@ -718,6 +752,7 @@ func (a *LinuxAppCenter) DaemonListInstalled(ctx context.Context) ([]InstalledAp
 				IsUninstall: d.Control.IsUninstall,
 				Upgrade:     d.Control.Upgrade,
 			},
+			Web: w,
 		})
 	}
 	return apps, nil
