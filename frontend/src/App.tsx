@@ -1055,9 +1055,7 @@ const App: React.FC = () => {
 
       <div className="flex-1 flex flex-col min-h-0 md:min-h-dvh min-w-0">
         <div className={cn(
-            /* pt 叠加 safe-area-inset-top：飞牛 app 内 WebView 用 viewport-fit=cover，
-               状态栏/刘海区域会盖住页面顶部，不加会被吃掉标题行 */
-            "md:hidden bg-card/70 backdrop-blur-xl border-b border-border/50 px-4 pt-[calc(1rem+env(safe-area-inset-top))] pb-3 sticky top-0 z-20 flex flex-col gap-3 transition-[box-shadow,border-color] duration-300",
+            "md:hidden bg-card/70 backdrop-blur-xl border-b border-border/50 px-4 pt-4 pb-3 sticky top-0 z-20 flex flex-col gap-3 transition-[box-shadow,border-color] duration-300",
             searchExpanded && "shadow-lg border-b-transparent"
           )}>
             {searchExpanded ? (

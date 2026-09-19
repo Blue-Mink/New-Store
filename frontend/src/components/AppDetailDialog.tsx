@@ -327,10 +327,8 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
       <DialogContent className="inset-0 w-full h-full max-w-none rounded-none translate-x-0 translate-y-0 flex flex-col !p-0 gap-0 overflow-hidden bg-background sm:inset-auto sm:left-[50%] sm:top-[50%] sm:h-auto sm:max-h-[88vh] sm:max-w-lg sm:translate-x-[-50%] sm:translate-y-[-50%] [&>button.absolute]:top-3 [&>button.absolute]:right-3 [&>button.absolute]:hidden sm:[&>button.absolute]:inline-flex">
         {/* 整页滚动区：移动端把应用的**全部**内容（图标排 + 描述 + 预览 + 信息 +
             说明/README + 操作）包进一张圆角内边框卡（与列表同款）；桌面端卡片样式
-            透明化（对话框本身就是容器）。返回走悬浮可拖钮。
-            移动端上下各叠 safe-area：飞牛 app 内 WebView（viewport-fit=cover）
-            状态栏/手势条区域会盖住内容。 */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-[env(safe-area-inset-bottom)] sm:px-0 sm:pt-0 sm:pb-0">
+            透明化（对话框本身就是容器）。返回走悬浮可拖钮。 */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-3 sm:px-0 sm:pt-0">
         <div className="bg-card rounded-[18px] border border-border/20 shadow-appstore overflow-hidden sm:bg-transparent sm:rounded-none sm:border-0 sm:shadow-none">
         {/* 头部行：应用信息 + 主操作 GET 位（下载 / 下载fpk 左右排列） */}
         <div className="border-b border-border/60 bg-background px-3 py-3 sm:bg-transparent">
