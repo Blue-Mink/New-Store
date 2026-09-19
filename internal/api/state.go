@@ -53,6 +53,31 @@ func (s *Server) refreshRegistry(ctx context.Context) error {
 
 	remoteApps, fetchErr := s.source.FetchApps(ctx)
 
+	// 官方应用中心源（fnos-official）：面板账号配置且启用时抓取官方目录。
+	// 失败只记状态（UI 在源列表展示原因），不影响其余源。
+	// 抓取顺序放在外部源之前：跨源去重（同名同版本保留第一个）时官方条目
+	// 优先于第三方 FnDepot 源的转载——官方云通道是权威来源，且带依赖选择
+	// 弹窗，与「同步官方应用中心」的意图一致。
+	if s.panelClient != nil && s.officialSource != nil && s.panelClient.Configured() {
+		if oapps, oerr := s.officialSource.FetchApps(ctx); oerr != nil {
+			log.Printf("official source: %s", oerr)
+			s.mu.Lock()
+			s.sourceStatus[source.OfficialSourceID] = sourceStatusInfo{
+				Error:       oerr.Error(),
+				LastFetched: time.Now(),
+			}
+			s.mu.Unlock()
+		} else {
+			remoteApps = append(remoteApps, oapps...)
+			s.mu.Lock()
+			s.sourceStatus[source.OfficialSourceID] = sourceStatusInfo{
+				AppCount:    len(oapps),
+				LastFetched: time.Now(),
+			}
+			s.mu.Unlock()
+		}
+	}
+
 	// FnDepot 外部源：并发抓取，与内置目录合并。
 	// 同名应用（appname 相同）全部保留：注册表用 appname@源名 区分，
 	// 内置目录与外部源的同名应用会同时展示。
@@ -99,8 +124,9 @@ func (s *Server) refreshRegistry(ctx context.Context) error {
 		}
 	}
 	s.lastCheck = now
-	if len(customStatus) > 0 {
-		s.sourceStatus = customStatus
+	// 只并入外部源状态，不能整 map 覆盖（会清掉同一轮刷新里写入的官方源状态）。
+	for id, st := range customStatus {
+		s.sourceStatus[id] = st
 	}
 	s.mu.Unlock()
 
@@ -462,7 +488,7 @@ func (s *Server) enrichMissingDates(ctx context.Context, apps []source.RemoteApp
 	_ = s.cacheStore.SaveProbeCache(probeCache)
 }
 
-// ListSources 返回外部源管理视图（配置 + 最近抓取状态）。
+// ListSources 返回外部源管理视图（官方源 + 配置 + 最近抓取状态）。
 func (s *Server) ListSources() []SourceEntry {
 	cfg := s.configMgr.Get()
 	s.mu.RLock()
@@ -475,7 +501,21 @@ func (s *Server) ListSources() []SourceEntry {
 		byID[cs.ID()] = cs
 	}
 
-	entries := make([]SourceEntry, 0, len(cfg.Sources))
+	entries := make([]SourceEntry, 0, len(cfg.Sources)+1)
+	// 官方应用中心：启用才展示（未启用时目录里没有它，列表里出现反而误导）。
+	if s.panelClient != nil && s.panelClient.Configured() {
+		e := SourceEntry{
+			ID:   source.OfficialSourceID,
+			Name: "官方应用中心",
+			URL:  "builtin://app-center",
+		}
+		if st, ok := status[source.OfficialSourceID]; ok {
+			e.AppCount = st.AppCount
+			e.Error = st.Error
+			e.LastFetched = st.LastFetched
+		}
+		entries = append(entries, e)
+	}
 	for _, entry := range cfg.Sources {
 		e := SourceEntry{
 			ID:   entry.ID,

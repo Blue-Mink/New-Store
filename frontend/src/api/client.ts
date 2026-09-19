@@ -322,9 +322,80 @@ export const fetchWizard = async (appname: string): Promise<AppWizard> => {
   return r.json();
 };
 
-export const installApp = (appname: string, onEvent: SSECallback, wizard?: WizardParam[]): SSEHandle => {
-  const qs = wizard && wizard.length ? `?wizard=${encodeURIComponent(JSON.stringify(wizard))}` : '';
+/** 官方应用中心（fnos-official）安装参数：安装卷 + 用户对每个依赖的选择。 */
+export interface PanelInstallParams {
+  volumeID?: number;
+  deps?: { appName: string; action: 'install' | 'skip' }[];
+}
+
+export const installApp = (appname: string, onEvent: SSECallback, wizard?: WizardParam[], panel?: PanelInstallParams): SSEHandle => {
+  const params = new URLSearchParams();
+  if (wizard && wizard.length) params.set('wizard', JSON.stringify(wizard));
+  if (panel) params.set('panel', JSON.stringify(panel));
+  const qs = params.toString() ? `?${params.toString()}` : '';
   return streamSSE(apiUrl(`/api/apps/${appname}/install${qs}`), onEvent);
+};
+
+/** 官方应用详情页 + 依赖弹窗数据（面板实时状态 + 商店目录同名条目）。 */
+export interface PanelDep {
+  sourceID: string;
+  appName: string;
+  name: string;
+  icon: string;
+  version: string;
+  /** noinstall / nostart / running（面板实时状态）。 */
+  status: string;
+}
+
+export interface PanelDetailApp {
+  appName: string;
+  name: string;
+  version: string;
+  icon: string;
+  docker: boolean;
+  installDepApps: PanelDep[];
+  appDetail: {
+    desc?: string;
+    maintainer?: string;
+    maintainerUrl?: string;
+    distributor?: string;
+    distributorUrl?: string;
+    installSize?: number;
+    osMinVersion?: string;
+  };
+}
+
+export interface PanelDetailResponse {
+  app: PanelDetailApp;
+  volume: number;
+  /** depAppname -> 商店目录里同名应用展示标签（可「用已有的」）。 */
+  same_name_apps?: Record<string, string[]>;
+}
+
+export const fetchPanelDetail = async (appname: string): Promise<PanelDetailResponse> => {
+  const r = await fetch(apiUrl(`/api/apps/${encodeURIComponent(appname)}/panel-detail`));
+  if (!r.ok) {
+    const body = await r.json().catch(() => null);
+    throw new Error(body?.error || `获取官方应用详情失败: ${r.statusText}`);
+  }
+  return r.json();
+};
+
+/** 用当前配置实测面板登录（返回官方目录应用数）。 */
+/** 实测面板登录；可传未保存的表单值（覆盖服务端配置）。 */
+export const testPanelLogin = async (creds?: {
+  username?: string;
+  password?: string;
+  base_url?: string;
+}): Promise<{ ok: boolean; app_count: number }> => {
+  const r = await fetch(apiUrl('/api/panel/test'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: creds ? JSON.stringify(creds) : undefined,
+  });
+  const body = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(body?.error || `登录测试失败: ${r.statusText}`);
+  return body;
 };
 
 export const updateApp = (appname: string, onEvent: SSECallback): SSEHandle => {
@@ -374,6 +445,11 @@ export interface Settings {
   // 内置源列表自动同步（空/缺省 = 内置默认列表地址）
   source_list_url?: string;
   source_list_disabled?: boolean;
+  // 官方应用中心直连（面板账号）
+  panel_enabled?: boolean;
+  panel_username?: string;
+  panel_base_url?: string;
+  panel_has_password?: boolean;
 }
 
 export interface SourceListSyncResult {
@@ -579,7 +655,7 @@ export const fetchSettings = async (): Promise<Settings> => {
   return response.json();
 };
 
-export const updateSettings = async (settings: { check_interval_hours: number; mirror: string; docker_mirror: string; custom_github_mirror?: string; custom_docker_mirror?: string; install_volume: number; source_list_url?: string; source_list_disabled?: boolean }): Promise<void> => {
+export const updateSettings = async (settings: { check_interval_hours: number; mirror: string; docker_mirror: string; custom_github_mirror?: string; custom_docker_mirror?: string; install_volume: number; source_list_url?: string; source_list_disabled?: boolean; panel_enabled?: boolean; panel_username?: string; panel_password?: string; panel_base_url?: string; panel_clear_password?: boolean }): Promise<void> => {
   const response = await fetch(apiUrl('/api/settings'), {
     method: 'PUT',
     headers: {

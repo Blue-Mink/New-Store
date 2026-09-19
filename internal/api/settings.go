@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -35,6 +36,11 @@ type settingsResponse struct {
 	// 内置源列表自动同步
 	SourceListURL      string `json:"source_list_url,omitempty"`
 	SourceListDisabled bool   `json:"source_list_disabled"`
+	// 官方应用中心直连（面板账号）；密码不回传，仅表示是否已设置
+	PanelEnabled   bool   `json:"panel_enabled"`
+	PanelUsername  string `json:"panel_username,omitempty"`
+	PanelBaseURL   string `json:"panel_base_url,omitempty"`
+	PanelHasPassword bool `json:"panel_has_password"`
 }
 
 type settingsRequest struct {
@@ -47,6 +53,12 @@ type settingsRequest struct {
 	// 内置源列表自动同步（空 URL = 用内置默认列表）
 	SourceListURL      string `json:"source_list_url"`
 	SourceListDisabled bool   `json:"source_list_disabled"`
+	// 官方应用中心直连（密码空 = 保持原值；显式清空用 PanelClearPassword）
+	PanelEnabled         bool   `json:"panel_enabled"`
+	PanelUsername        string `json:"panel_username"`
+	PanelPassword        string `json:"panel_password"`
+	PanelBaseURL         string `json:"panel_base_url"`
+	PanelClearPassword   bool   `json:"panel_clear_password"`
 }
 
 func githubMirrorOptionsResponse() []mirrorOptionResponse {
@@ -95,6 +107,10 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		VolumeOptions:       volOpts,
 		SourceListURL:       cfg.SourceListURL,
 		SourceListDisabled:  cfg.SourceListDisabled,
+		PanelEnabled:        cfg.PanelEnabled,
+		PanelUsername:       cfg.PanelUsername,
+		PanelBaseURL:        cfg.PanelBaseURL,
+		PanelHasPassword:    cfg.PanelPassword != "",
 	})
 }
 
@@ -122,6 +138,13 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	existing := s.configMgr.Get()
+	panelPassword := existing.PanelPassword
+	switch {
+	case req.PanelClearPassword:
+		panelPassword = ""
+	case req.PanelPassword != "":
+		panelPassword = req.PanelPassword
+	}
 	cfg := config.Config{
 		CheckIntervalHours: req.CheckIntervalHours,
 		Mirror:             req.Mirror,
@@ -130,9 +153,14 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		CustomDockerMirror: req.CustomDockerMirror,
 		InstallVolume:      req.InstallVolume,
 		IgnoredApps:        existing.IgnoredApps,
+		LocalInstalls:      existing.LocalInstalls, // 设置保存不能丢本机安装计数
 		Sources:            existing.Sources, // 外部应用源由 /api/sources 管理，这里保持不动
 		SourceListURL:      strings.TrimSpace(req.SourceListURL),
 		SourceListDisabled: req.SourceListDisabled,
+		PanelEnabled:       req.PanelEnabled,
+		PanelUsername:      strings.TrimSpace(req.PanelUsername),
+		PanelPassword:      panelPassword,
+		PanelBaseURL:       strings.TrimSpace(req.PanelBaseURL),
 	}
 
 	if err := s.configMgr.SaveConfig(cfg); err != nil {
@@ -140,9 +168,12 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.rebuildPanelClient()
 	if s.scheduler != nil {
 		s.scheduler.SetInterval(time.Duration(req.CheckIntervalHours) * time.Hour)
 	}
+	// 官方源开关/账号变化会直接改变目录内容，后台刷新注册表。
+	go s.refreshRegistryDebounced(context.Background())
 
 	var volOpts []volumeOptionResponse
 	if volumes, err := s.ac.ListVolumes(); err == nil {
@@ -164,5 +195,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		VolumeOptions:       volOpts,
 		SourceListURL:       cfg.SourceListURL,
 		SourceListDisabled:  cfg.SourceListDisabled,
+		PanelEnabled:        cfg.PanelEnabled,
+		PanelUsername:       cfg.PanelUsername,
+		PanelBaseURL:        cfg.PanelBaseURL,
+		PanelHasPassword:    cfg.PanelPassword != "",
 	})
 }

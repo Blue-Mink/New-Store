@@ -67,6 +67,10 @@ type AppInfo struct {
 	Changelog      string
 	SizeBytes      int64
 	SHA256         string
+
+	// PanelSourceID 仅官方源（fnos-official）应用：面板目录数字 sourceID，
+	// cloud 安装通道（download/task）定位包用。
+	PanelSourceID string
 }
 
 type Registry struct {
@@ -131,6 +135,7 @@ func (r *Registry) Merge(local []Manifest, remote []source.RemoteApp, installedT
 			Changelog:           item.Changelog,
 			SizeBytes:           item.SizeBytes,
 			SHA256:              item.SHA256,
+			PanelSourceID:       item.PanelSourceID,
 		}
 
 		// 无分类的应用（外部源/未标注目录）按项目类型自动归类

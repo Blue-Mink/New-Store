@@ -138,12 +138,16 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 // 一致：内置目录 > 应用中心本地条目 > 任意外部源。
 func sourceRank(source string) int {
 	switch source {
-	case "fnos-apps":
+	case "fnos-official":
+		// 官方应用中心是权威来源（版本最新、带依赖选择），同名折叠时优先于
+		// 内置目录与第三方转载（2026-09-19 用户需求：同步官方应用中心）。
 		return 0
-	case "fnOS应用中心":
+	case "fnos-apps":
 		return 1
-	default:
+	case "fnOS应用中心":
 		return 2
+	default:
+		return 3
 	}
 }
 

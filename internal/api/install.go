@@ -64,6 +64,17 @@ func (s *Server) runInstallLikeOperation(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
+	// 官方应用中心通道：fnos-official 源应用走面板 cloud 下载 + install/task
+	// （含依赖自动安装），与 FPK 下载通道互斥。
+	if s.isPanelApp(app) {
+		if opName == "update" {
+			_ = stream.sendError("官方应用请在官方应用中心内更新（New Store 后续版本支持）")
+			return
+		}
+		s.runPanelInstall(r.Context(), stream, opName, app, parsePanelParams(r))
+		return
+	}
+
 	s.pipeline.runStandard(r.Context(), stream, opName, app, params, s.refreshRegistry)
 }
 

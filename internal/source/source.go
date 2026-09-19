@@ -22,6 +22,9 @@ type RemoteApp struct {
 	Category        string
 	Source          string
 	PostInstallNote string
+	// PanelSourceID 是面板应用中心目录里的数字 sourceID（仅官方源
+	// fnos-official 使用）：cloud 下载任务 download/task 需要它定位包。
+	PanelSourceID string
 
 	// 外部源详情页扩展元数据（内置目录通常为空）。
 	ReadmeURL      string   // README 地址（详情页 Markdown 渲染）

@@ -501,6 +501,14 @@ type Config struct {
 	SourceListURL string `json:"source_list_url,omitempty"`
 	// SourceListDisabled 关闭「自动同步源列表」（旧配置无此字段 = 未关闭 = 自动同步开启）。
 	SourceListDisabled bool `json:"source_list_disabled,omitempty"`
+
+	// Panel 是官方应用中心（fnos-official 内置源 + cloud 安装通道）直连配置。
+	// 面板账号=本机 NAS 的 Web 登录账号（daemon 走 localhost 的 WS 登录流程
+	// 换 ost 会话 cookie，密码只存本机应用数据目录，不出网）。
+	PanelEnabled  bool   `json:"panel_enabled,omitempty"`
+	PanelUsername string `json:"panel_username,omitempty"`
+	PanelPassword string `json:"panel_password,omitempty"`
+	PanelBaseURL  string `json:"panel_base_url,omitempty"`
 }
 
 // CustomSource 描述一个用户添加的外部应用源。

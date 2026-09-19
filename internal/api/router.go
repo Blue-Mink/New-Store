@@ -6,6 +6,7 @@ import (
 	"fnos-store/internal/config"
 	"fnos-store/internal/core"
 	"fnos-store/internal/mirror"
+	"fnos-store/internal/panel"
 	"fnos-store/internal/platform"
 	"fnos-store/internal/scheduler"
 	"fnos-store/internal/source"
@@ -44,6 +45,11 @@ type Server struct {
 	// 每个源最近一次抓取的应用数与错误（按源 ID 索引）。
 	customSources []*source.FNDepotSource
 	sourceStatus  map[string]sourceStatusInfo
+
+	// panelClient 是官方应用中心（fnos-official）直连客户端；未配置/未启用
+	// 时为 nil，官方源自动降级为空（其余源不受影响）。
+	panelClient    *panel.Client
+	officialSource *source.OfficialSource
 
 	// mirrorMon 是 GitHub 加速源健康监测器（智能排序 + 自动切换），
 	// 由 startMirrorMonitor 在启动时创建。
@@ -112,6 +118,7 @@ func NewServer(cfg Config) *Server {
 		sourceStatus:     make(map[string]sourceStatusInfo),
 	}
 	s.routes()
+	s.rebuildPanelClient()
 	s.rebuildCustomSources()
 	s.startMirrorMonitor()
 	// 首次刷新放后台：源列表自动同步（首跑要验证几十个仓库）+ 目录抓取
@@ -151,6 +158,8 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("DELETE /api/sources/{id}", s.handleRemoveSource)
 	s.Mux.HandleFunc("POST /api/sources/{id}/sync", s.handleSyncSource)
 	s.Mux.HandleFunc("POST /api/sources/sync-list", s.handleSyncSourceList)
+	s.Mux.HandleFunc("GET /api/apps/{appname}/panel-detail", s.handlePanelDetail)
+	s.Mux.HandleFunc("POST /api/panel/test", s.handlePanelTest)
 	s.Mux.HandleFunc("GET /api/store-update", s.handleGetStoreUpdate)
 	s.Mux.HandleFunc("POST /api/store-update", s.handlePostStoreUpdate)
 	s.Mux.HandleFunc("POST /api/mirrors/check", s.handleCheckMirrors)
@@ -192,4 +201,18 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) SetScheduler(sched *scheduler.Scheduler) {
 	s.scheduler = sched
+}
+
+// rebuildPanelClient 依据配置重建官方应用中心直连客户端（启动与设置变更后
+// 调用）。未启用或未填账号时 panelClient=nil，官方源自动降级为空。
+func (s *Server) rebuildPanelClient() {
+	var client *panel.Client
+	if s.configMgr != nil {
+		cfg := s.configMgr.Get()
+		if cfg.PanelEnabled && strings.TrimSpace(cfg.PanelUsername) != "" {
+			client = panel.NewClient(cfg.PanelBaseURL, cfg.PanelUsername, cfg.PanelPassword)
+		}
+	}
+	s.panelClient = client
+	s.officialSource = source.NewOfficialSource(client)
 }

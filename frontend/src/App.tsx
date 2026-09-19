@@ -14,10 +14,11 @@ import FeaturedShowcase from './components/FeaturedShowcase';
 import ThemeToggle from './components/ThemeToggle';
 import MobileDock from './components/MobileDock';
 import AppRowList from './components/AppRowList';
-import { fetchApps, triggerCheck, installApp, updateApp, uninstallApp, fetchStatus, fetchStoreUpdate, triggerStoreUpdate, reloadApps, ignoreUpdate, unignoreUpdate, fetchRecommended, fetchWizard, controlApp, appWebUrl } from './api/client';
+import { fetchApps, triggerCheck, installApp, updateApp, uninstallApp, fetchStatus, fetchStoreUpdate, triggerStoreUpdate, reloadApps, ignoreUpdate, unignoreUpdate, fetchRecommended, fetchWizard, controlApp, appWebUrl, fetchPanelDetail } from './api/client';
+import PanelInstallDialog from './components/PanelInstallDialog';
 import { connectFnOSBridge, openAppInShell } from './lib/fnos-bridge';
 import { alphaInitial } from './lib/pinyin';
-import type { AppInfo, AppOperation, SSECallback, RecommendedApp, AppWizard, WizardParam } from './api/client';
+import type { AppInfo, AppOperation, SSECallback, RecommendedApp, AppWizard, WizardParam, PanelDetailResponse, PanelInstallParams } from './api/client';
 import { toast } from "sonner"
 import { Toaster } from "@/components/ui/sonner"
 import { ReportFailureDialog } from './components/ReportFailureDialog';
@@ -149,6 +150,10 @@ const App: React.FC = () => {
   const [wizardApp, setWizardApp] = useState<AppInfo | null>(null);
   const [wizardDef, setWizardDef] = useState<AppWizard | null>(null);
   const [wizardLoading, setWizardLoading] = useState(false);
+  // 官方应用中心（fnos-official）安装：详情+依赖弹窗
+  const [panelApp, setPanelApp] = useState<AppInfo | null>(null);
+  const [panelDetail, setPanelDetail] = useState<PanelDetailResponse | null>(null);
+  const [panelLoading, setPanelLoading] = useState(false);
   const [detailApp, setDetailApp] = useState<AppInfo | null>(null);
   const [successInfo, setSuccessInfo] = useState<{app: AppInfo; operation: 'install' | 'update'} | null>(null);
   // App Store large title：内容滚动后标题收缩、头部转毛玻璃
@@ -482,13 +487,13 @@ const App: React.FC = () => {
     }
   };
 
-  const runInstall = useCallback(async (app: AppInfo, wizard?: WizardParam[]) => {
+  const runInstall = useCallback(async (app: AppInfo, wizard?: WizardParam[], panel?: PanelInstallParams) => {
     const appname = app.appname;
     // Guard: prevent double-trigger overwriting an in-flight operation's cancel handle.
     if (appOperationsRef.current.has(appname)) return;
 
     const handler = createSSEHandler(app, 'install');
-    const handle = installApp(appname, handler, wizard);
+    const handle = installApp(appname, handler, wizard, panel);
     setAppOp(appname, {
       step: 'starting',
       progress: 0,
@@ -535,6 +540,26 @@ const App: React.FC = () => {
 
   const handleInstall = useCallback(async (app: AppInfo) => {
     if (appOperationsRef.current.has(app.appname)) return;
+
+    // 官方应用中心源：走面板 cloud 通道。先拉详情+依赖（依赖弹窗数据），
+    // 失败必须提示而不是静默回退（回退到 FPK 通道会 404/死循环，无意义）。
+    if (app.source === 'fnos-official') {
+      setPanelApp(app);
+      setPanelLoading(true);
+      setPanelDetail(null);
+      try {
+        const d = await fetchPanelDetail(app.appname);
+        setPanelDetail(d);
+      } catch (err) {
+        setPanelApp(null);
+        setPanelLoading(false);
+        toast.error(err instanceof Error ? err.message : '获取官方应用详情失败');
+        return;
+      }
+      setPanelLoading(false);
+      return;
+    }
+
     // Probe for an install form first. A lookup failure must never block
     // installing, so anything unexpected falls through to a plain install.
     setWizardApp(app);
@@ -1450,6 +1475,25 @@ const App: React.FC = () => {
             setWizardDef(null);
             setWizardLoading(false);
             void runInstall(app, params);
+          }}
+        />
+      )}
+
+      {panelApp && panelDetail && (
+        <PanelInstallDialog
+          detail={panelDetail}
+          loading={panelLoading}
+          onCancel={() => {
+            setPanelApp(null);
+            setPanelDetail(null);
+            setPanelLoading(false);
+          }}
+          onConfirm={(params: PanelInstallParams) => {
+            const app = panelApp;
+            setPanelApp(null);
+            setPanelDetail(null);
+            setPanelLoading(false);
+            void runInstall(app, undefined, params);
           }}
         />
       )}

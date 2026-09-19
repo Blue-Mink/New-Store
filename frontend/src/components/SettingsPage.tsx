@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { fetchSettings, updateSettings, fetchStoreUpdate, checkMirrors, fetchMirrorHealth, fetchDockerMirrorHealth, type MirrorOption, type MirrorCheckResult, type VolumeOption, type MirrorHealth } from '../api/client';
+import { fetchSettings, updateSettings, fetchStoreUpdate, checkMirrors, fetchMirrorHealth, fetchDockerMirrorHealth, testPanelLogin, type MirrorOption, type MirrorCheckResult, type VolumeOption, type MirrorHealth } from '../api/client';
 import type { StoreUpdateInfo } from '../api/client';
 import {
   Dialog,
@@ -201,6 +201,16 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // 官方应用中心直连（面板账号）
+  const [panelEnabled, setPanelEnabled] = useState(false);
+  const [panelUsername, setPanelUsername] = useState('');
+  const [panelPassword, setPanelPassword] = useState('');
+  const [panelBaseURL, setPanelBaseURL] = useState('');
+  const [panelHasPassword, setPanelHasPassword] = useState(false);
+  const [panelTesting, setPanelTesting] = useState(false);
+  // 密码框是否被用户动过（API 不回传密码，未动过=保持原值，不能发 clear）
+  const panelPasswordDirtyRef = useRef(false);
+
   // 加速源健康监测（智能监测 + 自动切换提示）
   const [mirrorHealth, setMirrorHealth] = useState<MirrorHealth | null>(null);
   const [healthRefreshing, setHealthRefreshing] = useState(false);
@@ -301,6 +311,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
         setCustomDockerMirror(settings.custom_docker_mirror || '');
         setInstallVolume(settings.install_volume || 0);
         setVolumeOptions(settings.volume_options || []);
+        setPanelEnabled(!!settings.panel_enabled);
+        setPanelUsername(settings.panel_username || '');
+        setPanelBaseURL(settings.panel_base_url || '');
+        setPanelHasPassword(!!settings.panel_has_password);
+        setPanelPassword('');
+        panelPasswordDirtyRef.current = false;
         if (m !== 'direct') prevMirrorRef.current = m;
         if (dm !== 'direct') prevDockerMirrorRef.current = dm;
         setStoreInfo(store);
@@ -366,6 +382,23 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     }
   };
 
+  const handlePanelTest = async () => {
+    setPanelTesting(true);
+    try {
+      // 表单里填了账号（含密码）→ 用表单值实测；否则用已保存的账号
+      const hasFormCreds = panelUsername.trim() !== '' && panelPassword !== '';
+      const r = hasFormCreds
+        ? await testPanelLogin({ username: panelUsername, password: panelPassword, base_url: panelBaseURL })
+        : await testPanelLogin();
+      toast.success(`登录成功：官方目录 ${r.app_count} 个应用`);
+    } catch (error) {
+      console.error('Panel login test failed:', error);
+      toast.error(error instanceof Error ? error.message : '登录测试失败');
+    } finally {
+      setPanelTesting(false);
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -376,6 +409,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
         custom_github_mirror: customGithubMirror || undefined,
         custom_docker_mirror: customDockerMirror || undefined,
         install_volume: installVolume,
+        panel_enabled: panelEnabled,
+        panel_username: panelUsername,
+        panel_password: panelPassword || undefined,
+        panel_base_url: panelBaseURL,
+        // 只有用户清空过密码框才显式清除；未动过=保持服务端原值
+        panel_clear_password: panelPasswordDirtyRef.current && panelPassword === '',
       });
       toast.success('设置已保存');
       onOpenChange(false);
@@ -676,6 +715,70 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                   </div>
                 </div>
 
+                {/* 官方应用中心 */}
+                <div className="bg-card rounded-[18px] border border-border/20 shadow-appstore px-4 py-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium leading-none">官方应用中心</span>
+                    <Switch checked={panelEnabled} onCheckedChange={setPanelEnabled} />
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    开启后直连本机系统官方应用中心，可浏览并安装全部官方应用（与在系统应用中心安装完全等价，安装前会列出依赖供选择）。
+                  </p>
+                  {panelEnabled && (
+                    <>
+                      <Separator />
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium leading-none">
+                          面板账号
+                        </label>
+                        <Input
+                          placeholder="Web 面板登录账号，如 fnos"
+                          value={panelUsername}
+                          onChange={(e) => setPanelUsername(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium leading-none">
+                          面板密码
+                        </label>
+                        <Input
+                          type="password"
+                          placeholder={panelHasPassword ? '已设置，留空保持不变' : '面板登录密码'}
+                          value={panelPassword}
+                          onChange={(e) => {
+                            setPanelPassword(e.target.value);
+                            panelPasswordDirtyRef.current = true;
+                          }}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium leading-none">
+                          面板地址（可选）
+                        </label>
+                        <Input
+                          placeholder="留空 = 本机面板（http://127.0.0.1:5666）"
+                          value={panelBaseURL}
+                          onChange={(e) => setPanelBaseURL(e.target.value)}
+                        />
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handlePanelTest}
+                        disabled={panelTesting}
+                        className="rounded-full px-3.5 h-7 text-xs font-medium"
+                      >
+                        {panelTesting ? (
+                          <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Zap className="mr-1 h-3.5 w-3.5" />
+                        )}
+                        测试登录
+                      </Button>
+                    </>
+                  )}
+                </div>
+
                 {/* 商店 */}
                 <div className="bg-card rounded-[18px] border border-border/20 shadow-appstore px-4 py-4 space-y-3">
                   <h3 className="text-sm font-medium text-muted-foreground">商店版本</h3>
@@ -702,7 +805,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                     )}
                   </div>
                   <button
-                    onClick={() => window.open('https://github.com/conversun/fnos-apps/issues/new?template=bug-report.yml', '_blank')}
+                    onClick={() => window.open('https://github.com/Blue-Mink/New-Store/issues', '_blank')}
                     className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
                   >
                     <MessageCircle className="h-3.5 w-3.5" />
