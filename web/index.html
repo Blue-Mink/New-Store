@@ -18,11 +18,12 @@
             (t !== 'light' &&
               window.matchMedia('(prefers-color-scheme: dark)').matches);
           document.documentElement.classList.toggle('dark', dark);
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
         } catch (e) { /* ignore */ }
       })();
     </script>
-    <script type="module" crossorigin src="./assets/index-BQqnuKco.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-BFYl-k_P.css">
+    <script type="module" crossorigin src="./assets/index-BNbkT-hc.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-Cx3km7ZU.css">
   </head>
   <body>
     <div id="root"></div>
