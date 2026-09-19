@@ -125,6 +125,13 @@ describe('themeTransition（fn-knock 风格圆形展开切换）', () => {
     expect(countStyles()).toBe(1);
     ensureThemeTransitionStyles();
     expect(countStyles()).toBe(1);
+    // 时长策略：桌面 1s；移动端（窄屏/触屏）0.45s
+    const styleText = document
+      .querySelector(`style#${STYLE_ID}`)
+      ?.textContent ?? '';
+    expect(styleText).toContain('--new-store-theme-transition-duration: 1s');
+    expect(styleText).toContain('(max-width: 768px), (pointer: coarse)');
+    expect(styleText).toContain('--new-store-theme-transition-duration: 0.45s');
   });
 
   it('callback 会等到 <html> 类翻转（finished 依赖 callback，模拟真实 API 时序）', async () => {

@@ -104,6 +104,14 @@ https://github.com/SomeAuthor/Apps`,rows:3,className:"w-full resize-y rounded-md
   );
 }
 
+/* 移动端（飞牛 app 内嵌 WebView / 触屏 / 窄屏）：fn-knock 的 1s 节奏在手机上
+   拖尾偏慢，缩短到 0.45s 跟手性更好；桌面浏览器保持 1s。 */
+@media (max-width: 768px), (pointer: coarse) {
+  :root {
+    --new-store-theme-transition-duration: 0.45s;
+  }
+}
+
 :root[data-theme-transitioning] *,
 :root[data-theme-transitioning] *::before,
 :root[data-theme-transitioning] *::after {
