@@ -143,6 +143,9 @@ type PanelAppDetail struct {
 	InstallSize    int64  `json:"installSize"`
 	InstallType    string `json:"installType"`
 	OSMinVersion   string `json:"osMinVersion"`
+	// Poster 是官方详情页的预览截图 URL 列表（部分应用为空）。
+	// otherPoster（{url, meta.size} 多尺寸版）与 poster 同源，不重复展示。
+	Poster []string `json:"poster"`
 }
 
 // DownloadStatus is GET /app-center/v1/download/status.

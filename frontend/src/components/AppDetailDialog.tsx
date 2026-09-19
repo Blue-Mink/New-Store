@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import type { AppInfo, AppOperation } from '../api/client';
-import { availableVersionLabel, installedVersionLabel, assetUrl, appWebUrl } from '../api/client';
+import type { AppInfo, AppOperation, PanelDetailResponse } from '../api/client';
+import { availableVersionLabel, installedVersionLabel, assetUrl, appWebUrl, fetchPanelDetail } from '../api/client';
 import { apiUrl } from '../api/base';
 import { cn } from '@/lib/utils';
 import {
@@ -87,9 +87,46 @@ const formatSize = (bytes?: number): string => {
   return (bytes / 1024).toFixed(0) + ' KB';
 };
 
+const formatDownloads = (n?: number): string => {
+  if (!n || n <= 0) return '-';
+  if (n >= 10000) return (n / 10000).toFixed(1) + ' 万';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return String(n);
+};
+
+/** 官方应用描述是面板发布者写的 HTML 片段（h3/p/b/br…）。
+ *  来源是官方 CDN（可信），但仍做白名单清洗：去 script/style/iframe 等
+ *  可执行节点与 on* 事件属性，只保留展示型标签。 */
+const sanitizeDescHtml = (html: string): string => {
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const BAD = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'FORM', 'INPUT', 'BUTTON']);
+    doc.body.querySelectorAll('*').forEach((el) => {
+      if (BAD.has(el.tagName)) {
+        el.remove();
+        return;
+      }
+      Array.from(el.attributes).forEach((attr) => {
+        const name = attr.name.toLowerCase();
+        if (name.startsWith('on')) el.removeAttribute(attr.name);
+        if ((name === 'href' || name === 'src') && /^\s*javascript:/i.test(attr.value)) {
+          el.removeAttribute(attr.name);
+        }
+      });
+    });
+    return doc.body.innerHTML;
+  } catch {
+    return html.replace(/<[^>]*>/g, '');
+  }
+};
+
 const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChange, onInstall, onUpdate, onIgnoreUpdate, onUnignoreUpdate, onUninstall, operation, onSourceFilter, onAuthorFilter, onDistributorFilter, onOpenApp, onControl, controlling }) => {
   const [readme, setReadme] = useState<string | null>(null);
   const [readmeError, setReadmeError] = useState(false);
+  // 官方应用（fnos-official）：列表条目不带描述/截图/发布者，打开详情时
+  // 惰性拉一次面板详情补全（描述 HTML、预览截图、发布者、安装体积等）。
+  const [panelInfo, setPanelInfo] = useState<PanelDetailResponse | null>(null);
+  const isOfficial = app?.source === 'fnos-official';
   const [lightbox, setLightbox] = useState<number | null>(null);
   const [lightboxLoading, setLightboxLoading] = useState(false);
   const [lightboxError, setLightboxError] = useState(false);
@@ -120,17 +157,22 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
   };
 
   // 灯箱切换图片：重置加载/错误态 + 预加载下一张（弱网下少一次白等）
+  // 注意：previewCount/previewSrc 在下方 early-return 之后才声明，这里自包含计算。
   useEffect(() => {
     if (lightbox == null || !app) return;
     setLightboxLoading(true);
     setLightboxError(false);
-    const pc = app.preview_count || 0;
+    const official = app.source === 'fnos-official';
+    const poster = official ? (panelInfo?.app.appDetail?.poster ?? []) : [];
+    const pc = official ? poster.length : (app.preview_count || 0);
     if (pc > 1) {
       const next = new Image();
-      next.src = assetUrl(app.key || app.appname, 'preview', (lightbox + 1) % pc);
+      next.src = official
+        ? (poster[(lightbox + 1) % pc] ?? '')
+        : assetUrl(app.key || app.appname, 'preview', (lightbox + 1) % pc);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lightbox, app?.key, open]);
+  }, [lightbox, app?.key, open, panelInfo]);
 
   // 切换应用时预览轮播回第一张
   useEffect(() => {
@@ -159,6 +201,20 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
     target?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
   };
 
+  // 切换应用时重新拉官方详情（描述/截图/发布者）
+  useEffect(() => {
+    if (!app || !open || app.source !== 'fnos-official') {
+      setPanelInfo(null);
+      return;
+    }
+    let cancelled = false;
+    setPanelInfo(null);
+    fetchPanelDetail(app.appname)
+      .then((d) => { if (!cancelled) setPanelInfo(d); })
+      .catch(() => { if (!cancelled) setPanelInfo(null); }); // 失败不影响基础信息展示
+    return () => { cancelled = true; };
+  }, [app?.key, open, app?.source]);
+
   // 切换应用时重新拉 README
   useEffect(() => {
     if (!app || !open || !app.has_readme) {
@@ -183,7 +239,11 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
 
   const isInstalled = app.installed;
   const canUpdate = isInstalled && app.has_update;
-  const previewCount = app.preview_count || 0;
+  // 预览图源：官方应用用面板详情的 poster（CDN 直链），其余用本地 asset 通道
+  const posterUrls: string[] = isOfficial ? (panelInfo?.app.appDetail?.poster ?? []) : [];
+  const previewCount = isOfficial ? posterUrls.length : (app.preview_count || 0);
+  const previewSrc = (i: number): string =>
+    isOfficial ? posterUrls[i] : assetUrl(app.key || app.appname, 'preview', i);
   // 打开目标（daemon appServiceInfo）；仅运行中的应用提供"打开"
   const openUrl = isInstalled ? appWebUrl(app) : null;
   const canControl = isInstalled && !!onControl && (app.start_stop ?? true) && app.status !== 'nostart';
@@ -267,8 +327,10 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
       <DialogContent className="inset-0 w-full h-full max-w-none rounded-none translate-x-0 translate-y-0 flex flex-col !p-0 gap-0 overflow-hidden bg-background sm:inset-auto sm:left-[50%] sm:top-[50%] sm:h-auto sm:max-h-[88vh] sm:max-w-lg sm:translate-x-[-50%] sm:translate-y-[-50%] [&>button.absolute]:top-3 [&>button.absolute]:right-3 [&>button.absolute]:hidden sm:[&>button.absolute]:inline-flex">
         {/* 整页滚动区：移动端把应用的**全部**内容（图标排 + 描述 + 预览 + 信息 +
             说明/README + 操作）包进一张圆角内边框卡（与列表同款）；桌面端卡片样式
-            透明化（对话框本身就是容器）。返回走悬浮可拖钮。 */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-3 sm:px-0 sm:pt-0">
+            透明化（对话框本身就是容器）。返回走悬浮可拖钮。
+            移动端上下各叠 safe-area：飞牛 app 内 WebView（viewport-fit=cover）
+            状态栏/手势条区域会盖住内容。 */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-[env(safe-area-inset-bottom)] sm:px-0 sm:pt-0 sm:pb-0">
         <div className="bg-card rounded-[18px] border border-border/20 shadow-appstore overflow-hidden sm:bg-transparent sm:rounded-none sm:border-0 sm:shadow-none">
         {/* 头部行：应用信息 + 主操作 GET 位（下载 / 下载fpk 左右排列） */}
         <div className="border-b border-border/60 bg-background px-3 py-3 sm:bg-transparent">
@@ -321,6 +383,13 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
                     {app.maintainer}
                   </button>
                 )}
+                {/* 官方应用的发布者来自面板详情（异步），纯文本展示（不做目录过滤） */}
+                {!app.maintainer && isOfficial && panelInfo?.app.appDetail?.maintainer && (
+                  <span className="inline-flex items-center gap-0.5 text-[11px] font-medium text-muted-foreground">
+                    <User className="h-3 w-3" />
+                    {panelInfo.app.appDetail.maintainer}
+                  </span>
+                )}
                 {app.distributor && app.distributor !== app.maintainer && (
                   <button
                     onClick={() => { if (onDistributorFilter) { onOpenChange(false); onDistributorFilter(app.distributor!); } }}
@@ -338,28 +407,49 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
                 )}
               </div>
             </div>
-            {/* 主操作 GET 位 + 下载 fpk：左右排列（靠近图标的是主按钮，后跟下载 fpk） */}
+            {/* 主操作 GET 位 + 下载 fpk：左右排列（靠近图标的是主按钮，后跟下载 fpk）
+                官方应用没有可直链的 FPK（走面板 cloud 通道），不显示下载 fpk */}
             <div className="flex items-center gap-2 shrink-0">
               {primaryPill}
-              <Button size="sm" variant="ghost" asChild className="h-9 px-3 text-[13px] font-medium text-muted-foreground hover:text-foreground rounded-full">
-                <a href={apiUrl(`/api/apps/${app.key || app.appname}/download`)} download>
-                  <Download className="mr-1 h-3.5 w-3.5" />下载 fpk
-                </a>
-              </Button>
+              {!isOfficial && (
+                <Button size="sm" variant="ghost" asChild className="h-9 px-3 text-[13px] font-medium text-muted-foreground hover:text-foreground rounded-full">
+                  <a href={apiUrl(`/api/apps/${app.key || app.appname}/download`)} download>
+                    <Download className="mr-1 h-3.5 w-3.5" />下载 fpk
+                  </a>
+                </Button>
+              )}
             </div>
           </div>
           </DialogHeader>
         </div>
         {/* 内容区：描述 / 预览 / 信息 / 更新说明 / README / 次要操作（移动端在卡片内） */}
         <div className="px-4 py-3 sm:px-5">
-        {app.description && (
-          <>
-            <DialogDescription className="text-sm leading-relaxed">
-              {app.description}
-            </DialogDescription>
-            <Separator />
-          </>
-        )}
+        {(() => {
+          const officialDesc = isOfficial ? panelInfo?.app.appDetail?.desc : undefined;
+          if (officialDesc) {
+            // 官方描述是 HTML 片段：白名单清洗后按富文本渲染
+            return (
+              <>
+                <DialogDescription
+                  className="text-sm leading-relaxed [&_h1]:text-base [&_h1]:font-semibold [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold [&_h4]:text-[13px] font-medium [&_p]:my-1.5 [&_b]:font-semibold [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_img]:max-w-full [&_img]:rounded-lg [&_a]:text-primary [&_a]:underline"
+                  dangerouslySetInnerHTML={{ __html: sanitizeDescHtml(officialDesc) }}
+                />
+                <Separator />
+              </>
+            );
+          }
+          if (app.description) {
+            return (
+              <>
+                <DialogDescription className="text-sm leading-relaxed">
+                  {app.description}
+                </DialogDescription>
+                <Separator />
+              </>
+            );
+          }
+          return null;
+        })()}
 
         {/* 预览图画廊：App Store 风格大图轮播 —— 手指横滑（touch snap 滚动）/
             桌面端圆点+箭头，点图放大进灯箱（灯箱同样支持左右滑动翻页） */}
@@ -386,7 +476,7 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
                     title="点击放大"
                   >
                     <img
-                      src={assetUrl(app.key || app.appname, 'preview', i)}
+                      src={previewSrc(i)}
                       alt={`${app.display_name} 预览 ${i + 1}`}
                       loading="lazy"
                       draggable={false}
@@ -453,11 +543,23 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
             {app.platform || '-'}
           </DetailRow>
 
-          {app.size_bytes ? (
-            <DetailRow icon={HardDrive} label="安装包大小">
-              {formatSize(app.size_bytes)}
+          {app.download_count ? (
+            <DetailRow icon={Download} label="下载次数">
+              {formatDownloads(app.download_count)}
             </DetailRow>
           ) : null}
+
+          {(app.size_bytes || (isOfficial && panelInfo?.app.appDetail?.installSize)) ? (
+            <DetailRow icon={HardDrive} label="安装包大小">
+              {formatSize(app.size_bytes || panelInfo?.app.appDetail?.installSize)}
+            </DetailRow>
+          ) : null}
+
+          {isOfficial && panelInfo?.app.appDetail?.osMinVersion && (
+            <DetailRow icon={Network} label="系统最低版本">
+              fnOS {panelInfo.app.appDetail.osMinVersion}
+            </DetailRow>
+          )}
 
           {app.sha256 && (
             <DetailRow icon={Hash} label="SHA256">
@@ -465,9 +567,12 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
             </DetailRow>
           )}
 
-          <DetailRow icon={Clock} label="最近更新">
-            {formatDate(app.updated_at)}
-          </DetailRow>
+          {/* 官方目录不提供更新时间（面板契约无此字段），空值行不显示 */}
+          {!isOfficial && app.updated_at && (
+            <DetailRow icon={Clock} label="最近更新">
+              {formatDate(app.updated_at)}
+            </DetailRow>
+          )}
 
           {app.homepage && (
             <DetailRow icon={Globe} label="官网">
@@ -730,7 +835,7 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
             ) : (
               <img
                 key={`${lightbox}-${lightboxRetry}`}
-                src={assetUrl(app.key || app.appname, 'preview', lightbox) + (lightboxRetry ? `&r=${lightboxRetry}` : '')}
+                src={previewSrc(lightbox) + (lightboxRetry ? `&r=${lightboxRetry}` : '')}
                 alt={`${app.display_name} 预览 ${lightbox + 1}`}
                 className={`max-w-full max-h-full object-contain rounded-lg transition-opacity duration-150 pointer-events-auto touch-none select-none ${lightboxLoading ? 'opacity-0' : 'opacity-100'} ${
                   lightboxAnim === 'next' ? 'lightbox-anim-next' : lightboxAnim === 'prev' ? 'lightbox-anim-prev' : 'lightbox-anim-open'

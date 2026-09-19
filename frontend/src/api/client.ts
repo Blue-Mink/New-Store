@@ -362,6 +362,8 @@ export interface PanelDetailApp {
     distributorUrl?: string;
     installSize?: number;
     osMinVersion?: string;
+    /** 官方详情页预览截图 URL（部分应用为空）。 */
+    poster?: string[];
   };
 }
 

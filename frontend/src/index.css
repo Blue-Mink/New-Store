@@ -200,3 +200,26 @@
 .lightbox-anim-next { animation: lightbox-in-next 180ms cubic-bezier(0.22, 1, 0.36, 1); }
 .lightbox-anim-prev  { animation: lightbox-in-prev  180ms cubic-bezier(0.22, 1, 0.36, 1); }
 .lightbox-anim-open  { animation: lightbox-in-open  200ms cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* ── 主题切换过渡：ThemeToggle 切换时给 <html> 临时挂 .theme-transition，
+      320ms 内所有元素的颜色属性渐变过渡（避免整页生硬闪切）────────────── */
+html.theme-transition,
+html.theme-transition *,
+html.theme-transition *::before,
+html.theme-transition *::after {
+  transition:
+    background-color 250ms ease,
+    border-color 250ms ease,
+    color 250ms ease,
+    fill 250ms ease,
+    stroke 250ms ease,
+    box-shadow 250ms ease !important;
+}
+
+/* ── 移动端 WebView（飞牛 app 内嵌）渲染适配 ──────────────────────────────
+   touch-action: manipulation 去掉双击缩放手势等待，首击立即生效（部分
+   WebView 首击被吞/延迟即此原因）；tap-highlight 统一为透明，跟 App Store 观感。 */
+html, body {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}

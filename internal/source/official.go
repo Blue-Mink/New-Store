@@ -3,6 +3,7 @@ package source
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"fnos-store/internal/panel"
 )
@@ -67,7 +68,22 @@ func (s *OfficialSource) FetchApps(ctx context.Context) ([]RemoteApp, error) {
 			Category:      category,
 			Source:        OfficialSourceID,
 			PanelSourceID: a.SourceID,
+			Platforms:     []string{platformFromIcon(a.Icon)},
 		})
 	}
 	return out, nil
+}
+
+// platformFromIcon 从官方 CDN 图标 URL 推断架构：
+// icon-<name>-<ver>-<platform>-<ts>.png，platform ∈ x86/arm64/all；
+// 无平台段（如 icon-nodejs_v22-22.18.0-1.png）按 x86 计。
+func platformFromIcon(icon string) string {
+	switch {
+	case strings.Contains(icon, "-arm64-") || strings.Contains(icon, "-arm-"):
+		return "arm"
+	case strings.Contains(icon, "-all-"):
+		return "all"
+	default:
+		return "x86"
+	}
 }
