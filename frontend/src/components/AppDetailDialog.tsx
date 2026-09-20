@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppInfo, AppOperation, PanelDetailResponse } from '../api/client';
-import { availableVersionLabel, installedVersionLabel, assetUrl, appWebUrl, fetchPanelDetail } from '../api/client';
-import { apiUrl } from '../api/base';
+import { availableVersionLabel, installedVersionLabel, assetUrl, appWebUrl, fetchPanelDetail, downloadFpk, sourceLabel, effectiveMaintainer, descriptionPlainText } from '../api/client';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import {
   Dialog,
@@ -40,9 +40,36 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  Check,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
+import DOMPurify from 'dompurify';
+
+/**
+ * 判断 README 内容是否为 HTML 文档/片段（而非 Markdown）。
+ * 第三方 FnDepot 源里相当一部分 README 直接给 HTML（<p>/<div>…），
+ * 走 ReactMarkdown 会把原始标签当纯文本显示出来——那种必须走
+ * innerHTML（先经 DOMPurify 消毒）渲染。
+ */
+// 详情页与应用列表共用的"源/开发者/发布者"蓝框徽章样式（字号两端统一）
+const META_PILL = "inline-flex items-start gap-1 rounded-full bg-primary/10 px-2 py-[3px] max-w-full text-[11px] leading-[15px] font-medium text-primary hover:bg-primary/20 transition-colors focus:outline-none focus-visible:outline-none";
+
+/** 描述富文本渲染样式（官方 desc / HTML 第三方 desc 共用；链接=主色+下划线） */
+const DESC_RICH_CLS = "text-sm leading-relaxed [&_h1]:text-base [&_h1]:font-semibold [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold [&_h4]:text-[13px] font-medium [&_p]:my-1.5 [&_b]:font-semibold [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_img]:max-w-full [&_img]:rounded-lg [&_a]:text-primary [&_a]:underline";
+
+const readmeLooksLikeHtml = (t: string): boolean => {
+  const s = (t || '').trimStart();
+  if (!s.startsWith('<')) return false;
+  const head = s.slice(0, 500);
+  const hasBlockTag = /<\/?(?:p|div|br|hr|span|ul|ol|li|h[1-6]|table|thead|tbody|tr|td|th|pre|code|section|article|blockquote|img|a)\b/i.test(head);
+  if (!hasBlockTag) return false;
+  // 同时存在明显的 Markdown 结构（# 标题 / 加粗 / 列表 / 表格）时按 Markdown 处理
+  const hasMarkdown = /^#{1,6}\s+\S|\*\*[^*\n]+\*\*|^[-*]\s+\S|^\d+\.\s+\S|^\|.+\|/m.test(s);
+  return !hasMarkdown;
+};
 
 // 移动端悬浮返回钮：磨玻璃圆钮贴左缘半露出（磁吸），细线 ‹ 箭头右移完全可见。
 
@@ -62,6 +89,8 @@ interface AppDetailDialogProps {
   onAuthorFilter?: (author: string) => void;
   /** 点击发布者 → 只看该发布者发布的应用 */
   onDistributorFilter?: (distributor: string) => void;
+  /** 搜索框内当前词条（徽章词条叠加多选），命中者渲染选中态。 */
+  activeTerms?: string[];
   /** 打开应用 Web UI（与 fnOS 应用中心"打开"按钮同机制） */
   onOpenApp?: (app: AppInfo) => void;
   /** 已安装应用启动/停用（与 fnOS 应用中心同步） */
@@ -120,7 +149,7 @@ const sanitizeDescHtml = (html: string): string => {
   }
 };
 
-const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChange, onInstall, onUpdate, onIgnoreUpdate, onUnignoreUpdate, onUninstall, operation, onSourceFilter, onAuthorFilter, onDistributorFilter, onOpenApp, onControl, controlling }) => {
+const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChange, onInstall, onUpdate, onIgnoreUpdate, onUnignoreUpdate, onUninstall, operation, onSourceFilter, onAuthorFilter, onDistributorFilter, activeTerms, onOpenApp, onControl, controlling }) => {
   const [readme, setReadme] = useState<string | null>(null);
   const [readmeError, setReadmeError] = useState(false);
   // 官方应用（fnos-official）：列表条目不带描述/截图/发布者，打开详情时
@@ -131,6 +160,25 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
   const [lightboxLoading, setLightboxLoading] = useState(false);
   const [lightboxError, setLightboxError] = useState(false);
   const [lightboxRetry, setLightboxRetry] = useState(0);
+  // 「下载 fpk」：SSE 进度（后端下载 FPK 到本地缓存并登记面板官方下载通道）。
+  // 进度显示在按钮内（此版 sonner 无 toast.update）。
+  const [dlBusy, setDlBusy] = useState(false);
+  const [dlPct, setDlPct] = useState<number | null>(null);
+  const handleDownloadFpk = () => {
+    if (dlBusy || !app) return;
+    setDlBusy(true);
+    setDlPct(null);
+    let doneMsg = '';
+    downloadFpk(app.appname, (ev) => {
+      if (ev.step === 'done' && ev.message) doneMsg = ev.message;
+      if (ev.step === 'downloading' && ev.total && ev.total > 0 && typeof ev.downloaded === 'number') {
+        setDlPct(Math.min(99, Math.round((ev.downloaded / ev.total) * 100)));
+      }
+    }).promise
+      .then(() => toast.success(doneMsg || 'FPK 下载完成'))
+      .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'FPK 下载失败'))
+      .finally(() => { setDlBusy(false); setDlPct(null); });
+  };
   // 灯箱换图动画方向：open=首次打开(缩放进入) / next / prev(左右滑入，消除生硬跳切)
   const [lightboxAnim, setLightboxAnim] = useState<'open' | 'next' | 'prev'>('open');
   // 预览轮播：当前可见图索引（按滚动位置更新，驱动圆点/计数/箭头）
@@ -337,6 +385,12 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
             <AppIcon app={app} className="w-12 h-12 rounded-[12px] shrink-0" />
             <div className="flex-1 min-w-0">
               <DialogTitle className="text-base truncate">{app.display_name}</DialogTitle>
+              {/* appname 统一显示在应用名下面（与列表同款） */}
+              {app.appname && (
+                <div className="text-[13px] text-muted-foreground/80 truncate" title={app.appname}>
+                  {app.appname}
+                </div>
+              )}
               <div className="flex items-center gap-2 mt-1 flex-wrap">
                 {isInstalled ? (
                   <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -358,65 +412,97 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
                   </Badge>
                 )}
               </div>
-              {/* 来源 + 作者（纯文本、无底框，点击过滤；内置目录 fnos-apps 不显示来源） */}
-              <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                {/* focus:outline-none：Dialog 打开时 Radix 自动聚焦首个元素，避免焦点环看起来像"框" */}
-                {app.source && app.source !== 'fnos-apps' && onSourceFilter && (
-                  <button
-                    onClick={() => { onOpenChange(false); onSourceFilter(app.source!); }}
-                    className="inline-flex items-center gap-0.5 text-[11px] font-medium text-primary/80 hover:text-primary transition-colors focus:outline-none focus-visible:outline-none"
-                    title={`只看「${app.source}」源的应用`}
-                  >
-                    <Tag className="h-3 w-3" />
-                    {app.source}
-                  </button>
-                )}
-                {app.maintainer && onAuthorFilter && (
-                  <button
-                    onClick={() => { onOpenChange(false); onAuthorFilter(app.maintainer!); }}
-                    className="inline-flex items-center gap-0.5 text-[11px] font-medium text-muted-foreground hover:text-primary transition-colors focus:outline-none focus-visible:outline-none"
-                    title={`只看「${app.maintainer}」的应用`}
-                  >
-                    <User className="h-3 w-3" />
-                    {app.maintainer}
-                  </button>
-                )}
-                {/* 官方应用的发布者来自面板详情（异步），纯文本展示（不做目录过滤） */}
-                {!app.maintainer && isOfficial && panelInfo?.app.appDetail?.maintainer && (
-                  <span className="inline-flex items-center gap-0.5 text-[11px] font-medium text-muted-foreground">
-                    <User className="h-3 w-3" />
-                    {panelInfo.app.appDetail.maintainer}
-                  </span>
-                )}
-                {app.distributor && app.distributor !== app.maintainer && (
-                  <button
-                    onClick={() => { if (onDistributorFilter) { onOpenChange(false); onDistributorFilter(app.distributor!); } }}
-                    className="inline-flex items-center gap-0.5 text-[11px] font-medium text-muted-foreground/70 hover:text-primary transition-colors focus:outline-none focus-visible:outline-none"
-                    title={onDistributorFilter ? `只看「${app.distributor}」发布的应用` : `发布：${app.distributor}`}
-                  >
-                    <Package className="h-3 w-3" />
-                    发布：{app.distributor}
-                    {app.distributor_url && (
-                      <a href={app.distributor_url} target="_blank" rel="noreferrer" className="inline-flex ml-0.5 hover:text-primary" onClick={(e) => e.stopPropagation()}>
-                        <ExternalLink className="h-2.5 w-2.5" />
-                      </a>
-                    )}
-                  </button>
-                )}
-              </div>
             </div>
             {/* 主操作 GET 位 + 下载 fpk：左右排列（靠近图标的是主按钮，后跟下载 fpk）
                 官方应用没有可直链的 FPK（走面板 cloud 通道），不显示下载 fpk */}
             <div className="flex items-center gap-2 shrink-0">
               {primaryPill}
               {!isOfficial && (
-                <Button size="sm" variant="ghost" asChild className="h-9 px-3 text-[13px] font-medium text-muted-foreground hover:text-foreground rounded-full">
-                  <a href={apiUrl(`/api/apps/${app.key || app.appname}/download`)} download>
-                    <Download className="mr-1 h-3.5 w-3.5" />下载 fpk
-                  </a>
+                <Button
+                  onClick={handleDownloadFpk}
+                  disabled={dlBusy}
+                  size="sm"
+                  variant="ghost"
+                  className="relative h-9 min-w-[96px] overflow-hidden px-3 text-[13px] font-medium text-muted-foreground hover:text-foreground rounded-full"
+                >
+                  {dlBusy && dlPct != null && (
+                    <span
+                      className="absolute inset-y-0 left-0 bg-primary/15 transition-[width] duration-300"
+                      style={{ width: `${dlPct}%` }}
+                    />
+                  )}
+                  <span className="relative inline-flex items-center">
+                    {dlBusy
+                      ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                      : <Download className="mr-1 h-3.5 w-3.5" />}
+                    {dlBusy ? (dlPct != null ? `下载中 ${dlPct}%` : '下载中…') : '下载 fpk'}
+                  </span>
                 </Button>
               )}
             </div>
+          </div>
+          {/* 来源 + 开发者/发布者：图标行下方横排，左缘对齐标题/"未安装"列
+              （pl = 图标 48px + gap 12px）；三项与列表同一款蓝框徽章（字号统一）、
+              小地球源图标、点击过滤；官方→飞牛应用中心源、内置→fnos-store/conversun */}
+          <div className="flex items-start gap-2 mt-2 flex-wrap pl-[60px]">
+            {(() => {
+              const src = sourceLabel(app);
+              const author = effectiveMaintainer(app);
+              // 徽章词条已在搜索框（多选叠加）→ 命中徽章渲染选中态（实心 + ✓）
+              const aSrc = !!activeTerms && !!src && activeTerms.includes(src);
+              const aAuth = !!activeTerms && !!author && activeTerms.includes(author);
+              const pillCls = (active: boolean) => cn(META_PILL, active && "bg-primary text-primary-foreground");
+              return (<>
+                {src && onSourceFilter && (
+                  <button
+                    onClick={() => { onOpenChange(false); onSourceFilter(src); }}
+                    className={pillCls(aSrc)}
+                    title={aSrc ? `正在筛选「${src}」源 · 点击清除` : `只看「${src}」源的应用`}
+                  >
+                    <Globe className="h-3 w-3 mt-px shrink-0" />
+                    <span className="min-w-0 break-words">{src}</span>
+                    {aSrc && <Check className="h-2.5 w-2.5 mt-px shrink-0" />}
+                  </button>
+                )}
+                {author && onAuthorFilter && (
+                  <button
+                    onClick={() => { onOpenChange(false); onAuthorFilter(author); }}
+                    className={pillCls(aAuth)}
+                    title={aAuth ? `正在筛选「${author}」· 点击清除` : `只看「${author}」开发的应用`}
+                  >
+                    <User className="h-3 w-3 mt-px shrink-0" />
+                    <span className="min-w-0 break-words">{author}</span>
+                    {aAuth && <Check className="h-2.5 w-2.5 mt-px shrink-0" />}
+                  </button>
+                )}
+                {/* 官方应用的开发者同步自面板详情（后台批量回填前，惰性详情兜底） */}
+                {!author && isOfficial && panelInfo?.app.appDetail?.maintainer && (
+                  <span className="inline-flex items-start gap-1 rounded-full bg-primary/10 px-2 py-[3px] max-w-full text-[11px] leading-[15px] font-medium text-primary">
+                    <User className="h-3 w-3 mt-px shrink-0" />
+                    <span className="min-w-0 break-words">{panelInfo.app.appDetail.maintainer}</span>
+                  </span>
+                )}
+              </>);
+            })()}
+            {app.distributor && app.distributor !== effectiveMaintainer(app) && (() => {
+              const aDist = !!activeTerms && activeTerms.includes(app.distributor);
+              return (
+              <button
+                onClick={() => { if (onDistributorFilter) { onOpenChange(false); onDistributorFilter(app.distributor!); } }}
+                className={cn(META_PILL, aDist && "bg-primary text-primary-foreground")}
+                title={onDistributorFilter ? (aDist ? `正在筛选「${app.distributor}」· 点击清除` : `只看「${app.distributor}」发布的应用`) : `发布：${app.distributor}`}
+              >
+                <Package className="h-3 w-3 mt-px shrink-0" />
+                <span className="min-w-0 break-words">发布：{app.distributor}</span>
+                {aDist && <Check className="h-2.5 w-2.5 mt-px shrink-0" />}
+                {app.distributor_url && (
+                  <a href={app.distributor_url} target="_blank" rel="noreferrer" className="inline-flex mt-px hover:text-primary" onClick={(e) => e.stopPropagation()}>
+                    <ExternalLink className="h-2.5 w-2.5" />
+                  </a>
+                )}
+              </button>
+              );
+            })()}
           </div>
           </DialogHeader>
         </div>
@@ -429,7 +515,7 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
             return (
               <>
                 <DialogDescription
-                  className="text-sm leading-relaxed [&_h1]:text-base [&_h1]:font-semibold [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold [&_h4]:text-[13px] font-medium [&_p]:my-1.5 [&_b]:font-semibold [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_img]:max-w-full [&_img]:rounded-lg [&_a]:text-primary [&_a]:underline"
+                  className={DESC_RICH_CLS}
                   dangerouslySetInnerHTML={{ __html: sanitizeDescHtml(officialDesc) }}
                 />
                 <Separator />
@@ -437,10 +523,24 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
             );
           }
           if (app.description) {
+            const d = app.description;
+            // 第三方 desc 同样允许 HTML（与官方 desc 同源写法）：像 HTML 则清洗后按富文本
+            // 渲染（<a> 超链接可点，如 QQ 群链接），否则纯文本
+            if (readmeLooksLikeHtml(d)) {
+              return (
+                <>
+                  <DialogDescription
+                    className={DESC_RICH_CLS}
+                    dangerouslySetInnerHTML={{ __html: sanitizeDescHtml(d) }}
+                  />
+                  <Separator />
+                </>
+              );
+            }
             return (
               <>
                 <DialogDescription className="text-sm leading-relaxed">
-                  {app.description}
+                  {descriptionPlainText(d)}
                 </DialogDescription>
                 <Separator />
               </>
@@ -633,11 +733,19 @@ const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChan
                 [&_img]:max-w-full [&_img]:rounded-lg [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_h1]:mt-4 [&_h1]:mb-2 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:mt-2 [&_h3]:mb-1
                 [&_pre]:bg-muted [&_pre]:rounded-lg [&_pre]:p-3 [&_pre]:overflow-x-auto [&_code]:text-xs
                 [&_table]:w-full [&_table]:text-xs [&_th]:border [&_th]:border-border [&_th]:p-1.5 [&_td]:border [&_td]:border-border [&_td]:p-1.5
-                [&_a]:text-primary [&_a]:underline
-                [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {readme || ''}
-                </ReactMarkdown>
+                [&_a]:text-primary [&_a]:underline [&_a]:break-all
+                [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5
+                [&_p]:my-2 [&_blockquote]:border-l-4 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_hr]:my-4 [&_video]:max-w-full [&_video]:rounded-lg">
+                {readme && readmeLooksLikeHtml(readme) ? (
+                  /* HTML README：第三方源直接给 HTML，Markdown 渲染会裸露标签，
+                     改走 DOMPurify 消毒后的 innerHTML */
+                  <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(readme, { ADD_ATTR: ['target'] }) }} />
+                ) : (
+                  /* Markdown README；rehypeRaw+sanitize 让内嵌 HTML 片段也安全渲染 */
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize]}>
+                    {readme || ''}
+                  </ReactMarkdown>
+                )}
               </div>
             )}
           </>

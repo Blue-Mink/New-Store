@@ -37,10 +37,18 @@ type mockPanel struct {
 	dlPoll         int
 	instPoll       int
 	installFailMsg string // 非空时 install/status 返回失败
+
+	// install/info 行为注入：wizards[appName] 非空即 hasWizard=true；
+	// noInstallInfo 模拟老面板（该端点 404）。
+	wizards       map[string]any
+	noInstallInfo bool
+
+	// instCustomParams 记录 install/task 实际收到的 customParameters。
+	instCustomParams map[string][]map[string]string
 }
 
 func newMockPanel(t *testing.T) *mockPanel {
-	mp := &mockPanel{t: t}
+	mp := &mockPanel{t: t, wizards: map[string]any{}, instCustomParams: map[string][]map[string]string{}}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/websocket", mp.handleWS)
@@ -51,6 +59,7 @@ func newMockPanel(t *testing.T) *mockPanel {
 	mux.HandleFunc("/app-center/v1/download/status", mp.requireOst(mp.handleDownloadStatus))
 	mux.HandleFunc("/app-center/v1/install/task", mp.requireOst(mp.handleInstallTask))
 	mux.HandleFunc("/app-center/v1/install/status", mp.requireOst(mp.handleInstallStatus))
+	mux.HandleFunc("/app-center/v1/install/info", mp.requireOst(mp.handleInstallInfo))
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -195,16 +204,37 @@ func (mp *mockPanel) handleInstallTask(w http.ResponseWriter, r *http.Request) {
 			DataVolumeId      int  `json:"dataVolumeId"`
 			ImmediateStart    bool `json:"immediateStart"`
 		} `json:"systemParameters"`
+		CustomParameters []map[string]string `json:"customParameters"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	mp.mu.Lock()
 	mp.instCalls = append(mp.instCalls, body.AppName)
+	mp.instCustomParams[body.AppName] = body.CustomParameters
 	cb := mp.onInstalled
 	mp.mu.Unlock()
 	if cb != nil {
 		cb(body.AppName)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"taskId": "1-mock-" + body.AppName}})
+}
+
+// handleInstallInfo 模拟 GET /app-center/v1/install/info（真面板对已下载的
+// 包返回向导定义；noInstallInfo 时 404，模拟老面板）。
+func (mp *mockPanel) handleInstallInfo(w http.ResponseWriter, r *http.Request) {
+	mp.mu.Lock()
+	missing := mp.noInstallInfo
+	content := mp.wizards[r.URL.Query().Get("appName")]
+	mp.mu.Unlock()
+	if missing {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `404 page not found`)
+		return
+	}
+	wizardInfo := map[string]any{"hasWizard": false}
+	if content != nil {
+		wizardInfo = map[string]any{"hasWizard": true, "wizardContent": content}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"wizardInfo": wizardInfo}})
 }
 
 func (mp *mockPanel) handleInstallStatus(w http.ResponseWriter, r *http.Request) {
@@ -374,10 +404,11 @@ func TestPanelInstallWithDependency(t *testing.T) {
 	if !strings.Contains(body, `"step":"done"`) {
 		t.Fatalf("install should finish with done, got:\n%s", body)
 	}
-	// 依赖先于主应用
+	// 依赖先于主应用；依赖第一次下载是向导预取（真面板里缓存复用，
+	// 不重复传输），第二次才是安装流程本体。
 	dl := mp.dlCalls
-	if len(dl) != 2 || dl[0] != "nodejs_v22" || dl[1] != "mcsmanager" {
-		t.Fatalf("download order = %v, want [nodejs_v22 mcsmanager]", dl)
+	if len(dl) != 3 || dl[0] != "nodejs_v22" || dl[1] != "nodejs_v22" || dl[2] != "mcsmanager" {
+		t.Fatalf("download order = %v, want [nodejs_v22 nodejs_v22 mcsmanager]", dl)
 	}
 	inst := mp.instCalls
 	if len(inst) != 2 || inst[0] != "nodejs_v22" || inst[1] != "mcsmanager" {
@@ -527,6 +558,92 @@ func TestPanelClientLoginContract(t *testing.T) {
 	bad := panel.NewClient(mp.url, "mockuser", "wrong")
 	if _, err := bad.AppList(context.Background()); err == nil {
 		t.Fatal("wrong password should fail login")
+	}
+}
+
+// TestPanelInstallWizardAutoFill 依赖带向导时按 install/info 的 initValue
+// 自动填充 customParameters（{key,value} 格式）；无向导的主应用发空数组。
+func TestPanelInstallWizardAutoFill(t *testing.T) {
+	mp := newMockPanel(t)
+	mp.wizards["nodejs_v22"] = []map[string]any{
+		{"items": []map[string]any{
+			{"type": "tips", "helpText": "欢迎安装"},
+			{"type": "text", "field": "wizard_app_port", "label": "端口", "initValue": "3000",
+				"rules": []map[string]any{{"required": true}}},
+		}},
+	}
+
+	registry := core.NewRegistry()
+	registry.Merge(nil, []source.RemoteApp{
+		{AppName: "mcsmanager", DisplayName: "MC 服务器管理", Version: "2.1.3",
+			Source: source.OfficialSourceID, PanelSourceID: "98", AppType: "fpk"},
+	}, nil)
+
+	fake := &fakeAppCenter{}
+	mp.onInstalled = fake.add
+	server := &Server{
+		registry:       registry,
+		queue:          NewOperationQueue(),
+		panelClient:    panel.NewClient(mp.url, "mockuser", "mock-pass"),
+		officialSource: source.NewOfficialSource(panel.NewClient(mp.url, "mockuser", "mock-pass")),
+		ac:             fake,
+		appsDir:        t.TempDir(),
+	}
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/apps/mcsmanager/install?panel="+url.QueryEscape(`{"volumeID":1}`), nil)
+	req.SetPathValue("appname", "mcsmanager")
+	rec := httptest.NewRecorder()
+	server.handleInstall(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"step":"done"`) {
+		t.Fatalf("install should finish with done, got:\n%s", body)
+	}
+	got := mp.instCustomParams["nodejs_v22"]
+	if len(got) != 1 || got[0]["key"] != "wizard_app_port" || got[0]["value"] != "3000" {
+		t.Fatalf("dep customParameters = %v, want [{wizard_app_port 3000}]", got)
+	}
+	if len(mp.instCustomParams["mcsmanager"]) != 0 {
+		t.Fatalf("main customParameters = %v, want empty", mp.instCustomParams["mcsmanager"])
+	}
+}
+
+// TestPanelInstallWizardOldPanel 老面板没有 install/info 端点（404）时，
+// 依赖安装不传向导参数照常进行，而不是整个安装失败。
+func TestPanelInstallWizardOldPanel(t *testing.T) {
+	mp := newMockPanel(t)
+	mp.noInstallInfo = true
+
+	registry := core.NewRegistry()
+	registry.Merge(nil, []source.RemoteApp{
+		{AppName: "mcsmanager", DisplayName: "MC 服务器管理", Version: "2.1.3",
+			Source: source.OfficialSourceID, PanelSourceID: "98", AppType: "fpk"},
+	}, nil)
+
+	fake := &fakeAppCenter{}
+	mp.onInstalled = fake.add
+	server := &Server{
+		registry:       registry,
+		queue:          NewOperationQueue(),
+		panelClient:    panel.NewClient(mp.url, "mockuser", "mock-pass"),
+		officialSource: source.NewOfficialSource(panel.NewClient(mp.url, "mockuser", "mock-pass")),
+		ac:             fake,
+		appsDir:        t.TempDir(),
+	}
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/apps/mcsmanager/install?panel="+url.QueryEscape(`{"volumeID":1}`), nil)
+	req.SetPathValue("appname", "mcsmanager")
+	rec := httptest.NewRecorder()
+	server.handleInstall(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"step":"done"`) {
+		t.Fatalf("install should finish with done on old panel, got:\n%s", body)
+	}
+	if len(mp.instCustomParams["nodejs_v22"]) != 0 {
+		t.Fatalf("old panel: customParameters = %v, want empty", mp.instCustomParams["nodejs_v22"])
 	}
 }
 

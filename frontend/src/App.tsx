@@ -14,7 +14,7 @@ import FeaturedShowcase from './components/FeaturedShowcase';
 import ThemeToggle from './components/ThemeToggle';
 import MobileDock from './components/MobileDock';
 import AppRowList from './components/AppRowList';
-import { fetchApps, triggerCheck, installApp, updateApp, uninstallApp, fetchStatus, fetchStoreUpdate, triggerStoreUpdate, reloadApps, ignoreUpdate, unignoreUpdate, fetchRecommended, fetchWizard, controlApp, appWebUrl, fetchPanelDetail } from './api/client';
+import { fetchApps, triggerCheck, installApp, updateApp, uninstallApp, fetchStatus, fetchStoreUpdate, triggerStoreUpdate, reloadApps, ignoreUpdate, unignoreUpdate, fetchRecommended, fetchWizard, controlApp, appWebUrl, fetchPanelDetail, sourceLabel, effectiveMaintainer } from './api/client';
 import PanelInstallDialog from './components/PanelInstallDialog';
 import { connectFnOSBridge, openAppInShell } from './lib/fnos-bridge';
 import { alphaInitial } from './lib/pinyin';
@@ -58,7 +58,7 @@ type SortKey = 'default' | 'downloads' | 'name' | 'alpha' | 'updated';
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: 'default', label: '随机' },
-  { value: 'alpha', label: '首字母 A-Z' },
+  { value: 'alpha', label: 'A-Z' },
   { value: 'downloads', label: '下载量' },
   { value: 'name', label: '名称' },
   { value: 'updated', label: '最近更新' },
@@ -137,10 +137,24 @@ const App: React.FC = () => {
     }
     prevKbOpenRef.current = open;
   }, [dockOffsetPx, searchExpanded]);
-  // 源 / 开发者 / 发布者 过滤（点卡片徽章或详情里的名字进入，可清除）
-  const [activeSourceFilter, setActiveSourceFilter] = useState<string | null>(null);
-  const [activeAuthorFilter, setActiveAuthorFilter] = useState<string | null>(null);
-  const [activeDistributorFilter, setActiveDistributorFilter] = useState<string | null>(null);
+  // 源 / 开发者 / 发布者 多选筛选：点徽章 = 把词条跳进搜索框（与原行为一致），
+  // 多个徽章词条在搜索框内叠加（空格分隔、AND 组合）；再点同一徽章移除该词条；
+  // 搜索框后的 × 一次性清空全部词条。无独立筛选 chip 行。
+  const applyTextFilter = (term: string) => {
+    const t = (term || '').trim();
+    if (!t) return;
+    if (activeFilter === 'recommended') switchFilter('all');
+    setSearchInput(prev => {
+      const terms = prev.split(/\s+/).filter(Boolean);
+      if (terms.includes(t)) return terms.filter(x => x !== t).join(' ');
+      return terms.length ? `${terms.join(' ')} ${t}` : t;
+    });
+  };
+  // 搜索框内当前生效的徽章/搜索词条（徽章选中态 + 计数联动用）
+  const activeSearchTerms = useMemo(
+    () => searchInput.trim().split(/\s+/).filter(Boolean),
+    [searchInput]
+  );
   const [activeCategory, setActiveCategory] = useState<CategoryKey | null>(null);
   const [pendingUninstallApp, setPendingUninstallApp] = useState<AppInfo | null>(null);
   // Apps can declare an install-time form (fnos/wizard/install). When one
@@ -150,6 +164,9 @@ const App: React.FC = () => {
   const [wizardApp, setWizardApp] = useState<AppInfo | null>(null);
   const [wizardDef, setWizardDef] = useState<AppWizard | null>(null);
   const [wizardLoading, setWizardLoading] = useState(false);
+  // 官方通道：用户在体积/依赖弹窗里确认的参数，向导弹窗确认后随安装一起提交
+  // （FPK 通道恒为 null）。
+  const [panelWizardParams, setPanelWizardParams] = useState<PanelInstallParams | null>(null);
   // 官方应用中心（fnos-official）安装：详情+依赖弹窗
   const [panelApp, setPanelApp] = useState<AppInfo | null>(null);
   const [panelDetail, setPanelDetail] = useState<PanelDetailResponse | null>(null);
@@ -565,6 +582,7 @@ const App: React.FC = () => {
     setWizardApp(app);
     setWizardLoading(true);
     setWizardDef(null);
+    setPanelWizardParams(null);
     try {
       const w = await fetchWizard(app.appname);
       if (w.has_wizard && (w.content?.length ?? 0) > 0) {
@@ -770,20 +788,21 @@ const App: React.FC = () => {
     if (activeFilter === 'installed' && !app.installed) return false;
     if (activeFilter === 'update_available' && !app.has_update) return false;
     if (activeCategory && app.category !== activeCategory) return false;
-    if (activeSourceFilter && app.source !== activeSourceFilter) return false;
-    if (activeAuthorFilter && (app.maintainer || '') !== activeAuthorFilter) return false;
-    if (activeDistributorFilter && (app.distributor || '') !== activeDistributorFilter) return false;
-
     if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
+      // 多词条 AND：搜索框里的每个空格分隔词条都必须命中（徽章词条叠加多选即走这里）
+      const terms = searchQuery.toLowerCase().split(/\s+/).filter(Boolean);
       const name = (app.display_name || '').toLowerCase();
       const appname = (app.appname || '').toLowerCase();
       const desc = (app.description || '').toLowerCase();
-      const source = (app.source || '').toLowerCase();
-      const author = (app.maintainer || '').toLowerCase();
+      // 源名/开发者走显示名（官方→飞牛应用中心源、内置→fnos-store/conversun），
+      // 与徽章点击填入搜索框的词条一致
+      const source = sourceLabel(app).toLowerCase();
+      const author = effectiveMaintainer(app).toLowerCase();
       const distributor = (app.distributor || '').toLowerCase();
-      if (!name.includes(q) && !appname.includes(q) && !desc.includes(q)
-        && !source.includes(q) && !author.includes(q) && !distributor.includes(q)) return false;
+      const hay = [name, appname, desc, source, author, distributor];
+      for (const q of terms) {
+        if (!hay.some(h => h.includes(q))) return false;
+      }
     }
 
     return true;
@@ -815,7 +834,7 @@ const App: React.FC = () => {
         }
         return 0;
     }
-  }), [apps, activeFilter, activeCategory, activeSourceFilter, activeAuthorFilter, activeDistributorFilter, searchQuery, sortBy, shuffledRank]);
+  }), [apps, activeFilter, activeCategory, searchQuery, sortBy, shuffledRank]);
 
   const counts = useMemo(() => ({
       all: apps.length,
@@ -1133,6 +1152,11 @@ const App: React.FC = () => {
                     <span className="text-[13px]">搜索</span>
                   )}
                 </button>
+                {/* 搜索栏后常显应用数：无搜索词=目录总数（目录刷新后实时更新），
+                    有搜索词=过滤结果数 */}
+                <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground" title="当前目录应用总数">
+                  {searchInput ? filteredApps.length : apps.length} 个应用
+                </span>
                 <div className="flex items-center gap-3 shrink-0">
                   <Button
                     variant="ghost"
@@ -1220,6 +1244,11 @@ const App: React.FC = () => {
                        </button>
                      )}
                    </div>
+                   {/* 搜索框后常显应用数：无搜索词=目录总数（目录刷新后实时更新），
+                       有搜索词=过滤结果数 */}
+                   <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground" title="当前目录应用总数">
+                     {searchInput ? filteredApps.length : apps.length} 个应用
+                   </span>
                  </>
                )}
                <ThemeToggle />
@@ -1298,44 +1327,7 @@ const App: React.FC = () => {
                   </button>
                 ))}
               </div>
-              {(activeSourceFilter || activeAuthorFilter || activeDistributorFilter) && (
-                <div className="flex items-center gap-2 mb-4 flex-wrap">
-                  <span className="text-xs text-muted-foreground">过滤：</span>
-                  {activeSourceFilter && (
-                    <button
-                      onClick={() => setActiveSourceFilter(null)}
-                      className="inline-flex items-center gap-1 rounded-full bg-primary text-primary-foreground px-3 h-7 text-xs font-medium hover:opacity-90"
-                      title="点击清除该过滤"
-                    >
-                      源：{activeSourceFilter}
-                      <X className="h-3 w-3" />
-                    </button>
-                  )}
-                  {activeAuthorFilter && (
-                    <button
-                      onClick={() => setActiveAuthorFilter(null)}
-                      className="inline-flex items-center gap-1 rounded-full bg-primary text-primary-foreground px-3 h-7 text-xs font-medium hover:opacity-90"
-                      title="点击清除该过滤"
-                    >
-                      开发者：{activeAuthorFilter}
-                      <X className="h-3 w-3" />
-                    </button>
-                  )}
-                  {activeDistributorFilter && (
-                    <button
-                      onClick={() => setActiveDistributorFilter(null)}
-                      className="inline-flex items-center gap-1 rounded-full bg-primary text-primary-foreground px-3 h-7 text-xs font-medium hover:opacity-90"
-                      title="点击清除该过滤"
-                    >
-                      发布者：{activeDistributorFilter}
-                      <X className="h-3 w-3" />
-                    </button>
-                  )}
-                  <span className="text-xs text-muted-foreground/70">
-                    {filteredApps.length} 个应用
-                  </span>
-                </div>
-              )}
+
               <div className="hidden md:block">
                 <AppList
                    apps={filteredApps}
@@ -1349,9 +1341,10 @@ const App: React.FC = () => {
                    filterType={activeFilter}
                    appOperations={appOperations}
                    searchQuery={searchQuery}
-                   onSourceFilter={setActiveSourceFilter}
-                   onAuthorFilter={setActiveAuthorFilter}
-                   onDistributorFilter={setActiveDistributorFilter}
+                   onSourceFilter={applyTextFilter}
+                   onAuthorFilter={applyTextFilter}
+                   onDistributorFilter={applyTextFilter}
+                   activeTerms={activeSearchTerms}
                    onControl={handleControl}
                    controlling={controlling}
                    onOpenApp={handleOpenApp}
@@ -1369,9 +1362,10 @@ const App: React.FC = () => {
                   searchQuery={searchQuery}
                   filterType={activeFilter}
                   upgradeAllowed={upgradeAllowed}
-                  onSourceFilter={setActiveSourceFilter}
-                  onAuthorFilter={setActiveAuthorFilter}
-                  onDistributorFilter={setActiveDistributorFilter}
+                  onSourceFilter={applyTextFilter}
+                  onAuthorFilter={applyTextFilter}
+                  onDistributorFilter={applyTextFilter}
+                  activeTerms={activeSearchTerms}
                   onControl={handleControl}
                   controlling={controlling}
                   onOpenApp={handleOpenApp}
@@ -1468,13 +1462,16 @@ const App: React.FC = () => {
             setWizardApp(null);
             setWizardDef(null);
             setWizardLoading(false);
+            setPanelWizardParams(null);
           }}
           onConfirm={(params) => {
             const app = wizardApp;
+            const panelParams = panelWizardParams;
             setWizardApp(null);
             setWizardDef(null);
             setWizardLoading(false);
-            void runInstall(app, params);
+            setPanelWizardParams(null);
+            void runInstall(app, params, panelParams ?? undefined);
           }}
         />
       )}
@@ -1493,7 +1490,31 @@ const App: React.FC = () => {
             setPanelApp(null);
             setPanelDetail(null);
             setPanelLoading(false);
-            void runInstall(app, undefined, params);
+            // 官方通道：体积/依赖确认后先静默预取向导（后端会先下载包再取
+            // install/info，安装时直接复用）。带向导则弹向导，否则直接装。
+            // 预取失败不阻塞安装（与 FPK 通道同一契约）。
+            setPanelWizardParams(params);
+            setWizardApp(app);
+            setWizardLoading(true);
+            setWizardDef(null);
+            fetchWizard(app.appname)
+              .then((w) => {
+                if (w.has_wizard && (w.content?.length ?? 0) > 0) {
+                  setWizardDef(w);
+                  setWizardLoading(false);
+                  return;
+                }
+                setWizardApp(null);
+                setWizardLoading(false);
+                setPanelWizardParams(null);
+                void runInstall(app, undefined, params);
+              })
+              .catch(() => {
+                setWizardApp(null);
+                setWizardLoading(false);
+                setPanelWizardParams(null);
+                void runInstall(app, undefined, params);
+              });
           }}
         />
       )}
@@ -1525,9 +1546,10 @@ const App: React.FC = () => {
         onUnignoreUpdate={handleUnignoreUpdate}
         onUninstall={handleUninstall}
         operation={detailApp ? appOperations.get(detailApp.appname) : undefined}
-        onSourceFilter={setActiveSourceFilter}
-        onAuthorFilter={setActiveAuthorFilter}
-        onDistributorFilter={setActiveDistributorFilter}
+        onSourceFilter={applyTextFilter}
+        onAuthorFilter={applyTextFilter}
+        onDistributorFilter={applyTextFilter}
+        activeTerms={activeSearchTerms}
         onOpenApp={handleOpenApp}
         onControl={handleControl}
         controlling={controlling}

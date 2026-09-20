@@ -1,6 +1,6 @@
 import React from 'react';
 import type { AppInfo, AppOperation } from '../api/client';
-import { availableVersionLabel, installedVersionLabel, appWebUrl, appDownloadLabel } from '../api/client';
+import { availableVersionLabel, installedVersionLabel, appWebUrl, appDownloadLabel, sourceLabel, effectiveMaintainer, descriptionPlainText } from '../api/client';
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,8 +16,10 @@ import {
   Container,
   X,
   BellOff,
-  Tag,
+  Globe,
+  User,
   ExternalLink,
+  Check,
 } from 'lucide-react';
 
 interface AppCardProps {
@@ -36,6 +38,8 @@ interface AppCardProps {
   onAuthorFilter?: (author: string) => void;
   /** 点击发布者 → 只看该发布者发布的应用 */
   onDistributorFilter?: (distributor: string) => void;
+  /** 搜索框内当前词条（徽章词条叠加多选），命中者渲染选中态。 */
+  activeTerms?: string[];
   /** 已安装应用启动/停用（与 fnOS 应用中心同步） */
   onControl?: (app: AppInfo, action: 'start' | 'stop') => void;
   /** 正在执行启停操作的应用名（显示转圈） */
@@ -44,7 +48,7 @@ interface AppCardProps {
   onOpenApp?: (app: AppInfo) => void;
 }
 
-const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, onDetail, onCancelOp, upgradeAllowed = true, onSourceFilter, onAuthorFilter, onDistributorFilter, onOpenApp }) => {
+const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, onDetail, onCancelOp, upgradeAllowed = true, onSourceFilter, onAuthorFilter, onDistributorFilter, onOpenApp, activeTerms }) => {
   const isInstalled = app.installed;
   const canUpdate = isInstalled && app.has_update;
   const downloadLabel = appDownloadLabel(app);
@@ -132,46 +136,12 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
               )}
             </div>
 
-            {/* 来源徽章（外部源）+ 开发者行（App Store 风格，可点击过滤） */}
-            <div className="flex items-center gap-1.5 min-w-0">
-              {/* 仅外部 FnDepot 源应用标注来源徽章；内置目录（fnos-apps）不显示 */}
-              {app.source && app.source !== 'fnos-apps' && onSourceFilter && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); onSourceFilter(app.source!); }}
-                  className="shrink-0 inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-1.5 h-[18px] text-[10px] font-medium text-primary hover:bg-primary/20 transition-colors"
-                  title={`只看「${app.source}」源的应用`}
-                >
-                  <Tag className="h-2.5 w-2.5" />
-                  <span className="max-w-[90px] truncate">{app.source}</span>
-                </button>
-              )}
-              {app.maintainer && onAuthorFilter ? (
-                <button
-                  onClick={(e) => { e.stopPropagation(); onAuthorFilter(app.maintainer!); }}
-                  className="text-xs text-muted-foreground/80 truncate hover:text-primary transition-colors"
-                  title={`只看「${app.maintainer}」开发的应用`}
-                >
-                  {app.maintainer}
-                </button>
-              ) : (
-                <span className="text-xs text-muted-foreground/80 truncate" title={app.appname}>
-                  {app.appname}
-                </span>
-              )}
-              {app.distributor && app.distributor !== app.maintainer && onDistributorFilter && (
-                <>
-                  <span className="text-muted-foreground/30 shrink-0">·</span>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onDistributorFilter(app.distributor!); }}
-                    className="inline-flex items-center gap-0.5 text-xs text-muted-foreground/80 truncate hover:text-primary transition-colors shrink-0"
-                    title={`只看「${app.distributor}」发布的应用`}
-                  >
-                    <Package className="h-3 w-3 shrink-0" />
-                    <span className="max-w-[90px] truncate">{app.distributor}</span>
-                  </button>
-                </>
-              )}
-            </div>
+            {/* 所有应用：appname 统一显示在应用名下面 */}
+            {app.appname && (
+              <span className="text-[13px] text-muted-foreground/80 truncate" title={app.appname}>
+                {app.appname}
+              </span>
+            )}
 
             <div className="flex items-center flex-wrap gap-x-1.5 text-xs text-muted-foreground">
               <span>v{isInstalled ? installedVersionLabel(app) : app.latest_version}</span>
@@ -193,6 +163,58 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
                 </>
               )}
             </div>
+
+            {/* 应用源/开发者/发布者（版本号之下）：三项统一同款蓝框徽章 + 小地球源图标，
+                全部可点击过滤；长名称在框内换行不截断 */}
+            <div className="flex items-start flex-wrap gap-1 min-w-0">
+              {(() => {
+                const src = sourceLabel(app);
+                const author = effectiveMaintainer(app);
+                const dist = app.distributor;
+                // 徽章词条已在搜索框（多选叠加）→ 命中徽章渲染选中态（实心 + ✓）
+                const aSrc = !!activeTerms && !!src && activeTerms.includes(src);
+                const aAuth = !!activeTerms && !!author && activeTerms.includes(author);
+                const aDist = !!activeTerms && !!dist && activeTerms.includes(dist);
+                const pillBase = "inline-flex items-start gap-1 rounded-full px-2 py-[3px] max-w-full text-[11px] leading-[15px] font-medium transition-colors";
+                const pillCls = (active: boolean) => cn(pillBase, active ? "bg-primary text-primary-foreground" : "bg-primary/10 text-primary hover:bg-primary/20");
+                return (<>
+                  {/* 所有应用都标注来源：官方→飞牛应用中心源、内置→fnos-store、外部源→显示名 */}
+                  {src && onSourceFilter && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onSourceFilter(src); }}
+                      className={pillCls(aSrc)}
+                      title={aSrc ? `正在筛选「${src}」源 · 点击清除` : `只看「${src}」源的应用`}
+                    >
+                      <Globe className="h-3 w-3 mt-px shrink-0" />
+                      <span className="min-w-0 break-words">{src}</span>
+                      {aSrc && <Check className="h-2.5 w-2.5 mt-px shrink-0" />}
+                    </button>
+                  )}
+                  {author && onAuthorFilter && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onAuthorFilter(author); }}
+                      className={pillCls(aAuth)}
+                      title={aAuth ? `正在筛选「${author}」· 点击清除` : `只看「${author}」开发的应用`}
+                    >
+                      <User className="h-3 w-3 mt-px shrink-0" />
+                      <span className="min-w-0 break-words">{author}</span>
+                      {aAuth && <Check className="h-2.5 w-2.5 mt-px shrink-0" />}
+                    </button>
+                  )}
+                  {dist && dist !== author && onDistributorFilter && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onDistributorFilter(dist); }}
+                      className={pillCls(aDist)}
+                      title={aDist ? `正在筛选「${dist}」· 点击清除` : `只看「${dist}」发布的应用`}
+                    >
+                      <Package className="h-3 w-3 mt-px shrink-0" />
+                      <span className="min-w-0 break-words">{dist}</span>
+                      {aDist && <Check className="h-2.5 w-2.5 mt-px shrink-0" />}
+                    </button>
+                  )}
+                </>);
+              })()}
+            </div>
           </div>
         </div>
 
@@ -202,7 +224,7 @@ const AppCard: React.FC<AppCardProps> = ({ app, operation, onInstall, onUpdate, 
             onClick={() => onDetail?.(app)}
             title="点击查看详情"
           >
-            {app.description}
+            {descriptionPlainText(app.description)}
           </p>
         )}
 

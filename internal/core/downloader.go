@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -24,6 +25,7 @@ type DownloadRequest struct {
 
 type Downloader struct {
 	httpClient  *http.Client
+	mu          sync.RWMutex
 	downloadDir string
 	tmpDir      string
 }
@@ -46,6 +48,30 @@ func NewDownloader(downloadDir string) *Downloader {
 	}
 }
 
+// DownloadDir 返回当前 FPK 下载目录（设置页展示用）。
+func (d *Downloader) DownloadDir() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.downloadDir
+}
+
+// SetDownloadDir 运行时切换 FPK 下载目录（设置页「FPK 下载目录」保存时调用）。
+// 空路径忽略。已有缓存留在旧目录（不会自动迁移）。
+func (d *Downloader) SetDownloadDir(dir string) {
+	if strings.TrimSpace(dir) == "" {
+		return
+	}
+	d.mu.Lock()
+	d.downloadDir = strings.TrimSpace(dir)
+	d.mu.Unlock()
+}
+
+func (d *Downloader) dir() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.downloadDir
+}
+
 // staleTmpAge is how old a temp file must be before cleanup may reap it. A
 // younger file may belong to an in-flight download — deleting it out from
 // under os.Rename was conversun/fnos-apps#245.
@@ -54,7 +80,7 @@ const staleTmpAge = time.Hour
 // CleanupStaleTmpFiles reaps ABANDONED download temp files (older than
 // staleTmpAge). It is safe to run while a download is in flight.
 func (d *Downloader) CleanupStaleTmpFiles() error {
-	entries, err := os.ReadDir(d.downloadDir)
+	entries, err := os.ReadDir(d.dir())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -76,7 +102,7 @@ func (d *Downloader) CleanupStaleTmpFiles() error {
 		if time.Since(info.ModTime()) < staleTmpAge {
 			continue
 		}
-		_ = os.Remove(filepath.Join(d.downloadDir, entry.Name()))
+		_ = os.Remove(filepath.Join(d.dir(), entry.Name()))
 	}
 	return nil
 }
@@ -86,7 +112,7 @@ func (d *Downloader) Download(ctx context.Context, req DownloadRequest, progress
 		return "", errors.New("file name is required")
 	}
 
-	if err := os.MkdirAll(d.downloadDir, 0o755); err != nil {
+	if err := os.MkdirAll(d.dir(), 0o755); err != nil {
 		return "", fmt.Errorf("create download dir: %w", err)
 	}
 
@@ -95,7 +121,7 @@ func (d *Downloader) Download(ctx context.Context, req DownloadRequest, progress
 	}
 
 	prefixedName := req.AppName + "-" + req.FileName
-	finalPath := filepath.Join(d.downloadDir, prefixedName)
+	finalPath := filepath.Join(d.dir(), prefixedName)
 
 	// 缓存复用：安装向导预取（fetchWizard）已完整下载过同一 FPK 时直接复用，
 	// 避免大应用（100MB+）被下载两次。文件名含版本（如 jellyfin_12.1_x86.fpk），
@@ -120,7 +146,7 @@ func (d *Downloader) Download(ctx context.Context, req DownloadRequest, progress
 		// let any second actor (OS /tmp reaper, stale cleanup, retry) delete
 		// the in-flight file under os.Rename (conversun/fnos-apps#245). The
 		// ".fpk.tmp" suffix is kept so CleanupStaleTmpFiles still matches.
-		tmp, err := os.CreateTemp(d.downloadDir, prefixedName+".*.fpk.tmp")
+		tmp, err := os.CreateTemp(d.dir(), prefixedName+".*.fpk.tmp")
 		if err != nil {
 			return "", fmt.Errorf("create temp file: %w", err)
 		}

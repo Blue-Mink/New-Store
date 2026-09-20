@@ -13,3 +13,6 @@ redeploy.sh
 parent-harness.html
 parent-harness-mobile.html
 releases/
+
+# 本地调试工具（含测试机硬编码凭证），不入仓库
+cmd/detailtest/

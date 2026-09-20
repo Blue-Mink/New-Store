@@ -1,10 +1,11 @@
 package core
 
 import (
-	"fnos-store/internal/source"
 	"sort"
 	"strings"
 	"time"
+
+	"fnos-store/internal/source"
 )
 
 type AppStatus string
@@ -190,7 +191,13 @@ func (r *Registry) Merge(local []Manifest, remote []source.RemoteApp, installedT
 	// 内容级去重：跨源（含内置目录）同名（忽略大小写）+ 同 SHA256 = 同一份包，
 	// 只保留元数据最全的一个；sha256 缺失的条目无法证明同一性，全部保留
 	// （不同开发者/不同构建由用户按详情页的开发者与哈希自行区分）。
-	result = dedupeIdenticalApps(result)
+	// 被去重隐藏的条目同时从 r.apps 移除：它们与保留者是同一份包，若留在
+	// 映射里，Get 的裸 appname 回退扫描会随机命中它们，把按 AppName 寻址的
+	// 操作（安装/向导/详情）路由到非预期源——列表里根本看不到那个条目。
+	result, hiddenKeys := dedupeIdenticalApps(result)
+	for _, key := range hiddenKeys {
+		delete(r.apps, key)
+	}
 
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].UpdatedAt != result[j].UpdatedAt {
@@ -225,7 +232,9 @@ func dedupePriority(app AppInfo) int {
 
 // dedupeIdenticalApps 移除跨源重复收录的同一份包。
 // 判定依据是 SHA256（内容同一性的硬证据）；同分保留先出现的条目。
-func dedupeIdenticalApps(apps []AppInfo) []AppInfo {
+// 返回值第二个是「被隐藏条目」的内部键（AppKey）列表：调用方应把它们从
+// 注册表映射中一并移除，否则按裸 appname 的查找仍会随机命中这些隐藏条目。
+func dedupeIdenticalApps(apps []AppInfo) ([]AppInfo, []string) {
 	type groupKey struct{ name, sha string }
 	winners := make(map[groupKey]int)
 	for i, app := range apps {
@@ -248,15 +257,18 @@ func dedupeIdenticalApps(apps []AppInfo) []AppInfo {
 		}
 	}
 	if len(drop) == 0 {
-		return apps
+		return apps, nil
 	}
 	out := make([]AppInfo, 0, len(apps)-len(drop))
+	hidden := make([]string, 0, len(drop))
 	for i, app := range apps {
-		if !drop[i] {
-			out = append(out, app)
+		if drop[i] {
+			hidden = append(hidden, app.AppKey())
+			continue
 		}
+		out = append(out, app)
 	}
-	return out
+	return out, hidden
 }
 
 func (r *Registry) List() []AppInfo {
@@ -267,24 +279,72 @@ func (r *Registry) List() []AppInfo {
 
 func (r *Registry) Get(appname string) (AppInfo, bool) {
 	// 优先按内部键（appname 或 appname@源名）精确命中；
-	// 回退按裸 appname 扫描（内置目录优先），兼容只传 appname 的旧调用。
+	// 回退按裸 appname 扫描，同名多条时按「列表卡片折叠」的同一优先级
+	// 确定性裁决（见 api.dedupeAppsByAppName）：已安装条目优先，其次来源
+	// 等级（官方 > 内置目录 > 应用中心本地 > 其他外部源），最后 AppKey
+	// 字典序兜底。旧实现按 map 遍历顺序取第一个非内置条目——map 序随机，
+	// 同名转载条目会让安装/向导在任意源间随机路由（2026-09-19 Vaultwarden
+	// 真机实锤：官方卡片被 shuangji66 同名片随机抢路由）。
 	if app, ok := r.apps[appname]; ok {
 		return app, ok
 	}
-	var fallback AppInfo
-	hasFallback := false
+	var best AppInfo
+	hasBest := false
 	for _, app := range r.apps {
 		if app.AppName != appname {
 			continue
 		}
-		if !hasFallback || app.Source == "fnos-apps" {
-			fallback, hasFallback = app, true
-			if app.Source == "fnos-apps" {
-				break
-			}
+		if !hasBest || betterGetCandidate(app, best) {
+			best, hasBest = app, true
 		}
 	}
-	return fallback, hasFallback
+	return best, hasBest
+}
+
+// GetFold 是 Get 的大小写不敏感变体：FPK manifest 的 appname 常为小写
+// （"gitea"），而注册表条目可能首字母大写（"Gitea"）。裁决规则与 Get 回退一致。
+func (r *Registry) GetFold(appname string) (AppInfo, bool) {
+	if app, ok := r.Get(appname); ok {
+		return app, true
+	}
+	var best AppInfo
+	hasBest := false
+	for _, app := range r.apps {
+		if !strings.EqualFold(app.AppName, appname) {
+			continue
+		}
+		if !hasBest || betterGetCandidate(app, best) {
+			best, hasBest = app, true
+		}
+	}
+	return best, hasBest
+}
+
+// betterGetCandidate 报告 a 在 Get 回退裁决中是否优于 b。
+func betterGetCandidate(a, b AppInfo) bool {
+	if a.Installed != b.Installed {
+		return a.Installed
+	}
+	ra, rb := SourceRank(a.Source), SourceRank(b.Source)
+	if ra != rb {
+		return ra < rb
+	}
+	return a.AppKey() < b.AppKey()
+}
+
+// SourceRank 给出同名折叠/裁决时的来源优先级：官方应用中心是权威来源
+// （版本最新、带依赖选择），优先于内置目录与第三方转载。
+func SourceRank(source string) int {
+	switch source {
+	case "fnos-official":
+		return 0
+	case "fnos-apps":
+		return 1
+	case "fnOS应用中心":
+		return 2
+	default:
+		return 3
+	}
 }
 
 // GetBest 返回同名（AppName 精确匹配）条目中版本最高的一个。
@@ -430,6 +490,60 @@ func (r *Registry) ReconcileInstalled(daemon map[string]string) {
 			app.Status = AppStatusInstalledUpToDate
 			app.HasRevisionUpdate = false
 			r.apps[r.lastResult[i].AppKey()] = app
+		}
+	}
+}
+
+// SetOfficialDescription 回填官方应用（fnos-official）的描述。
+// 面板 app/list 不带 desc 字段（355 条实测为空），只能逐条 app/detail
+// 拉（见 Server.enrichOfficialMeta）；已持有与 Merge 相同的锁时调用。
+func (r *Registry) SetOfficialDescription(appname, desc string) {
+	if desc == "" {
+		return
+	}
+	for i := range r.lastResult {
+		a := &r.lastResult[i]
+		if a.Source != "fnos-official" || !strings.EqualFold(a.AppName, appname) {
+			continue
+		}
+		a.Description = desc
+		if app, ok := r.apps[a.AppKey()]; ok {
+			app.Description = desc
+			r.apps[a.AppKey()] = app
+		}
+	}
+}
+
+// SetOfficialMeta 回填官方应用（fnos-official）的开发者/发布者。
+// 面板 app/list 不带这两个字段，只能逐条 app/detail 拉取（见
+// Server.enrichOfficialMeta）；已持有与 Merge 相同的锁时调用。
+func (r *Registry) SetOfficialMeta(appname, maintainer, maintainerURL, distributor, distributorURL string) {
+	if maintainer == "" && distributor == "" {
+		return
+	}
+	for i := range r.lastResult {
+		a := &r.lastResult[i]
+		if a.Source != "fnos-official" || !strings.EqualFold(a.AppName, appname) {
+			continue
+		}
+		if maintainer != "" {
+			a.Maintainer = maintainer
+			a.MaintainerURL = maintainerURL
+		}
+		if distributor != "" {
+			a.Distributor = distributor
+			a.DistributorURL = distributorURL
+		}
+		if app, ok := r.apps[a.AppKey()]; ok {
+			if maintainer != "" {
+				app.Maintainer = maintainer
+				app.MaintainerURL = maintainerURL
+			}
+			if distributor != "" {
+				app.Distributor = distributor
+				app.DistributorURL = distributorURL
+			}
+			r.apps[a.AppKey()] = app
 		}
 	}
 }

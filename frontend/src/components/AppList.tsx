@@ -24,7 +24,8 @@ interface AppListProps {
   controlling?: string | null;
   /** 打开已安装应用的 Web UI（有 web 入口的应用才渲染按钮）。 */
   onOpenApp?: (app: AppInfo) => void;
-  /** 打开应用设置（fnOS 设置→应用 的该应用面板）。 */
+  /** 搜索框内当前词条（徽章词条叠加多选），命中者渲染选中态。 */
+  activeTerms?: string[];
 }
 
 const getEmptyMessage = (filterType?: string) => {
@@ -38,7 +39,7 @@ const getEmptyMessage = (filterType?: string) => {
   }
 };
 
-const AppList: React.FC<AppListProps> = ({ apps, loading, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, filterType, appOperations, searchQuery, upgradeAllowed, onSourceFilter, onAuthorFilter, onDistributorFilter, onControl, controlling, onOpenApp }) => {
+const AppList: React.FC<AppListProps> = ({ apps, loading, onInstall, onUpdate, onUninstall, onDetail, onCancelOp, filterType, appOperations, searchQuery, upgradeAllowed, onSourceFilter, onAuthorFilter, onDistributorFilter, onControl, controlling, onOpenApp, activeTerms }) => {
   if (loading) {
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -90,6 +91,7 @@ const AppList: React.FC<AppListProps> = ({ apps, loading, onInstall, onUpdate, o
           onSourceFilter={onSourceFilter}
           onAuthorFilter={onAuthorFilter}
           onDistributorFilter={onDistributorFilter}
+          activeTerms={activeTerms}
           onControl={onControl}
           controlling={controlling}
           onOpenApp={onOpenApp}

@@ -3,6 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ExternalLink, Package } from 'lucide-react';
 import type { RecommendedApp } from '../api/client';
+import { descriptionPlainText } from '../api/client';
 import { cn } from "@/lib/utils";
 
 interface RecommendedAppCardProps {
@@ -39,7 +40,7 @@ const RecommendedAppCard: React.FC<RecommendedAppCardProps> = ({ app }) => {
 
         {app.description && (
           <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-            {app.description}
+            {descriptionPlainText(app.description)}
           </p>
         )}
 

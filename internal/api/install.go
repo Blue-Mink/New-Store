@@ -71,11 +71,12 @@ func (s *Server) runInstallLikeOperation(w http.ResponseWriter, r *http.Request,
 			_ = stream.sendError("官方应用请在官方应用中心内更新（New Store 后续版本支持）")
 			return
 		}
-		s.runPanelInstall(r.Context(), stream, opName, app, parsePanelParams(r))
+		s.runPanelInstall(r.Context(), stream, opName, app, parsePanelParams(r), params)
 		return
 	}
 
 	s.pipeline.runStandard(r.Context(), stream, opName, app, params, s.refreshRegistry)
+	s.refreshInstalledNames()
 }
 
 func (s *Server) runSelfUpdate(w http.ResponseWriter, r *http.Request, app core.AppInfo) {

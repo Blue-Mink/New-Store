@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -134,22 +135,9 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// sourceRank 给出同名应用折叠时的来源优先级，与 Registry.Get 的解析顺序
-// 一致：内置目录 > 应用中心本地条目 > 任意外部源。
-func sourceRank(source string) int {
-	switch source {
-	case "fnos-official":
-		// 官方应用中心是权威来源（版本最新、带依赖选择），同名折叠时优先于
-		// 内置目录与第三方转载（2026-09-19 用户需求：同步官方应用中心）。
-		return 0
-	case "fnos-apps":
-		return 1
-	case "fnOS应用中心":
-		return 2
-	default:
-		return 3
-	}
-}
+// sourceRank 给出同名应用折叠时的来源优先级，与 core.SourceRank（Registry.Get
+// 的回退裁决）共用同一实现，保证「用户看到的卡片」和「后端路由的条目」一致。
+func sourceRank(source string) int { return core.SourceRank(source) }
 
 // dedupeAppsByAppName 把同一 appname 的多条目录条目折叠为一张卡，保留在列表
 // 中的原位置。保留规则：已安装条目优先于未安装条目；安装状态相同时来源等级
@@ -329,6 +317,31 @@ func (s *Server) handleGetWizard(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "应用已安装，请使用更新功能")
 		return
 	}
+
+	// Official-panel channel: the panel only answers install/info for a
+	// package that has already been downloaded, so the probe runs a silent
+	// pre-download (the real install reuses it from the panel's download
+	// cache) and maps the panel's wizardContent into the same
+	// {has_wizard, content} shape the FPK channel returns.
+	if s.isPanelApp(app) {
+		info, err := s.preparePanelInstallInfo(r.Context(), app)
+		if err != nil {
+			// Same fallback contract as the FPK path below: a lookup
+			// failure must not block installing with defaults.
+			writeJSON(w, http.StatusOK, map[string]any{
+				"appname": appName, "has_wizard": false, "error": err.Error(),
+			})
+			return
+		}
+		hasWizard := info.WizardInfo.HasWizard && len(info.WizardInfo.WizardContent) > 0
+		resp := map[string]any{"appname": appName, "has_wizard": hasWizard}
+		if hasWizard {
+			resp["content"] = json.RawMessage(info.WizardInfo.WizardContent)
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
 	if app.DownloadURL == "" {
 		writeAPIError(w, http.StatusNotFound, "no download available")
 		return

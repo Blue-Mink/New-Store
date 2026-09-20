@@ -61,6 +61,82 @@ type Server struct {
 
 	mu               sync.RWMutex
 	refreshDebouncer *refreshDebouncer
+
+	// installedNamesCache 已安装应用小缓存（appname 小写 → 版本），供
+	// 「FPK 下载列表显示已安装」等高频查询；60s TTL，安装操作后 force 刷新。
+	installedNamesCache installedNamesCache
+
+	// officialDetailFetched 记录哪些官方应用已经拉过 app/detail（无论字段
+	// 是否为空），避免面板某字段真为空时每次刷新都重复拉。受 mu 保护。
+	officialDetailFetched map[string]bool
+}
+
+type installedNamesCache struct {
+	mu    sync.Mutex
+	at    time.Time
+	names map[string]string
+}
+
+// installedAppNames 返回当前已安装应用（appname 小写 → 版本）。
+// 三处取并集，覆盖「其他方式安装」的应用：
+//   - 本地 manifest 扫描（@appcenter 磁盘事实，含官方中心/手动装的应用）
+//   - 商店自己记住的安装 tag（New Store 安装/更新写回）
+//   - 注册表 Installed 条目（daemon 对账过）
+func (s *Server) installedAppNames(force bool) map[string]string {
+	c := &s.installedNamesCache
+	c.mu.Lock()
+	if !force && c.names != nil && time.Since(c.at) < 60*time.Second {
+		out := c.names
+		c.mu.Unlock()
+		return out
+	}
+	out := make(map[string]string)
+	if s.appsDir != "" {
+		if local, err := core.ScanInstalled(s.appsDir); err == nil {
+			for _, m := range local {
+				if m.AppName == "" {
+					continue
+				}
+				ver := m.FpkVersion
+				if ver == "" {
+					ver = m.Version
+				}
+				out[strings.ToLower(m.AppName)] = ver
+			}
+		}
+	}
+	if s.cacheStore != nil {
+		for k, v := range s.cacheStore.InstalledTags() {
+			if _, ok := out[strings.ToLower(k)]; !ok {
+				out[strings.ToLower(k)] = v
+			}
+		}
+	}
+	s.mu.RLock()
+	if s.registry != nil {
+		for _, app := range s.registry.List() {
+			if !app.Installed || app.AppName == "" {
+				continue
+			}
+			ver := app.InstalledFpkVersion
+			if ver == "" {
+				ver = app.InstalledVersion
+			}
+			if _, ok := out[strings.ToLower(app.AppName)]; !ok {
+				out[strings.ToLower(app.AppName)] = ver
+			}
+		}
+	}
+	s.mu.RUnlock()
+	c.names = out
+	c.at = time.Now()
+	c.mu.Unlock()
+	return out
+}
+
+// refreshInstalledNames 安装/更新操作后强制刷新已安装缓存。
+func (s *Server) refreshInstalledNames() {
+	_ = s.installedAppNames(true)
 }
 
 // sourceStatusInfo 是单个外部源最近一次抓取的结果摘要。
@@ -111,9 +187,10 @@ func NewServer(cfg Config) *Server {
 		platform:         cfg.Platform,
 		storeApp:         cfg.StoreApp,
 		staticFS:         cfg.StaticFS,
-		statusByApp:      make(map[string]string),
-		controlByApp:     make(map[string]platform.AppControl),
-		webByApp:         make(map[string]platform.WebService),
+		statusByApp:            make(map[string]string),
+		controlByApp:           make(map[string]platform.AppControl),
+		webByApp:               make(map[string]platform.WebService),
+		officialDetailFetched:  make(map[string]bool),
 		refreshDebouncer: &refreshDebouncer{},
 		sourceStatus:     make(map[string]sourceStatusInfo),
 	}
@@ -141,6 +218,10 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/apps/{appname}/start", func(w http.ResponseWriter, r *http.Request) { s.handleStartStop(w, r, "start") })
 	s.Mux.HandleFunc("POST /api/apps/{appname}/stop", func(w http.ResponseWriter, r *http.Request) { s.handleStartStop(w, r, "stop") })
 	s.Mux.HandleFunc("GET /api/apps/{appname}/download", s.handleDownloadFpk)
+	s.Mux.HandleFunc("POST /api/apps/{appname}/download-task", s.handleDownloadTask)
+	s.Mux.HandleFunc("GET /api/fpk-downloads", s.handleListFpkDownloads)
+	s.Mux.HandleFunc("DELETE /api/fpk-downloads/{name}", s.handleDeleteFpkDownload)
+	s.Mux.HandleFunc("POST /api/fpk-downloads/{name}/install", s.handleInstallFpkDownload)
 	s.Mux.HandleFunc("GET /api/apps/{appname}/asset", s.handleAppAsset)
 	s.Mux.HandleFunc("GET /api/apps/{appname}/wizard", s.handleGetWizard)
 	s.Mux.HandleFunc("GET /api/apps/{appname}/logs", s.handleGetAppLogs)
@@ -157,6 +238,8 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/sources/batch", s.handleBatchAddSources)
 	s.Mux.HandleFunc("DELETE /api/sources/{id}", s.handleRemoveSource)
 	s.Mux.HandleFunc("POST /api/sources/{id}/sync", s.handleSyncSource)
+	s.Mux.HandleFunc("POST /api/sources/{id}/toggle", s.handleToggleSource)
+	s.Mux.HandleFunc("POST /api/sources/reorder", s.handleReorderSources)
 	s.Mux.HandleFunc("POST /api/sources/sync-list", s.handleSyncSourceList)
 	s.Mux.HandleFunc("GET /api/apps/{appname}/panel-detail", s.handlePanelDetail)
 	s.Mux.HandleFunc("POST /api/panel/test", s.handlePanelTest)

@@ -36,6 +36,9 @@ type settingsResponse struct {
 	// 内置源列表自动同步
 	SourceListURL      string `json:"source_list_url,omitempty"`
 	SourceListDisabled bool   `json:"source_list_disabled"`
+	// FPK 下载目录 + 应用源自动监测
+	DownloadDir            string `json:"download_dir"`
+	SourceAutoCareDisabled bool   `json:"source_auto_care_disabled"`
 	// 官方应用中心直连（面板账号）；密码不回传，仅表示是否已设置
 	PanelEnabled   bool   `json:"panel_enabled"`
 	PanelUsername  string `json:"panel_username,omitempty"`
@@ -53,6 +56,9 @@ type settingsRequest struct {
 	// 内置源列表自动同步（空 URL = 用内置默认列表）
 	SourceListURL      string `json:"source_list_url"`
 	SourceListDisabled bool   `json:"source_list_disabled"`
+	// FPK 下载目录（空 = 保持默认）+ 应用源自动监测开关
+	DownloadDir            string `json:"download_dir"`
+	SourceAutoCareDisabled bool   `json:"source_auto_care_disabled"`
 	// 官方应用中心直连（密码空 = 保持原值；显式清空用 PanelClearPassword）
 	PanelEnabled         bool   `json:"panel_enabled"`
 	PanelUsername        string `json:"panel_username"`
@@ -107,6 +113,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		VolumeOptions:       volOpts,
 		SourceListURL:       cfg.SourceListURL,
 		SourceListDisabled:  cfg.SourceListDisabled,
+		DownloadDir:         s.pipeline.downloads.DownloadDir(),
+		SourceAutoCareDisabled: cfg.SourceAutoCareDisabled,
 		PanelEnabled:        cfg.PanelEnabled,
 		PanelUsername:       cfg.PanelUsername,
 		PanelBaseURL:        cfg.PanelBaseURL,
@@ -157,6 +165,8 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		Sources:            existing.Sources, // 外部应用源由 /api/sources 管理，这里保持不动
 		SourceListURL:      strings.TrimSpace(req.SourceListURL),
 		SourceListDisabled: req.SourceListDisabled,
+		DownloadDir:        strings.TrimSpace(req.DownloadDir),
+		SourceAutoCareDisabled: req.SourceAutoCareDisabled,
 		PanelEnabled:       req.PanelEnabled,
 		PanelUsername:      strings.TrimSpace(req.PanelUsername),
 		PanelPassword:      panelPassword,
@@ -167,6 +177,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// FPK 下载目录变更即时生效（下载器运行时切换）
+	s.pipeline.downloads.SetDownloadDir(cfg.DownloadDir)
 
 	s.rebuildPanelClient()
 	if s.scheduler != nil {
@@ -195,6 +208,8 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		VolumeOptions:       volOpts,
 		SourceListURL:       cfg.SourceListURL,
 		SourceListDisabled:  cfg.SourceListDisabled,
+		DownloadDir:         s.pipeline.downloads.DownloadDir(),
+		SourceAutoCareDisabled: cfg.SourceAutoCareDisabled,
 		PanelEnabled:        cfg.PanelEnabled,
 		PanelUsername:       cfg.PanelUsername,
 		PanelBaseURL:        cfg.PanelBaseURL,

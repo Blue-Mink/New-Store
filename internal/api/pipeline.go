@@ -935,6 +935,88 @@ func (p *installPipeline) runStandard(ctx context.Context, stream *sseStream, op
 	_ = stream.sendProgress(progressPayload{Step: "done", NewVersion: newVersion, Message: "操作完成"})
 }
 
+// runLocalFpkInstall 直接安装已缓存的本地 FPK（设置页 FPK 列表「直接安装」入口）。
+// 与 runStandard 的差异：无下载步骤（文件已在本地，安装后保留在缓存中不删除）、
+// 无向导（按应用默认参数安装）。其余通道与商店安装完全一致：
+// daemon install 优先、install-local 兜底、卷解析/预检/校验/启动确认同款。
+func (p *installPipeline) runLocalFpkInstall(ctx context.Context, stream *sseStream, fpkPath string, app core.AppInfo, refreshFn func(context.Context) error) {
+	// 端口占用预检（与 runStandard 一致）：避免半安装僵尸态。
+	if err := p.precheckServicePort(app, nil); err != nil {
+		_ = stream.sendError(err.Error())
+		return
+	}
+
+	// docker 应用先拉镜像（dockerPull 对非 compose 应用自动 no-op）。
+	if app.AppType == "docker" {
+		dir, err := p.extractFpk(fpkPath)
+		if err == nil {
+			pullErr := p.dockerPull(ctx, stream, dir, app)
+			os.RemoveAll(dir)
+			if pullErr != nil {
+				_ = stream.sendError(pullErr.Error())
+				return
+			}
+		}
+	}
+
+	volume, err := p.resolveVolume()
+	if err != nil {
+		_ = stream.sendError(err.Error())
+		return
+	}
+
+	if err := p.preflightInstall(volume, fpkPath); err != nil {
+		_ = stream.sendError(err.Error())
+		return
+	}
+
+	var installStep func() error
+	switch chooseInstallRoute("install", p.ac.DaemonInstallAvailable()) {
+	case routeDaemonInstall:
+		installStep = func() error { return p.installFpkWithWizard(ctx, fpkPath, volume, nil) }
+	default: // routeInstallLocal
+		installStep = func() error { return p.installFpk(fpkPath, volume) }
+	}
+
+	if err := runWithVirtualProgress(ctx, stream, "installing", "正在安装...", installStep); err != nil {
+		_ = stream.sendError(err.Error())
+		return
+	}
+
+	expectedVersion := app.FpkVersion
+	if expectedVersion == "" {
+		expectedVersion = app.LatestVersion
+	}
+
+	if err := runWithVirtualProgress(ctx, stream, "verifying", "正在验证安装...", func() error {
+		if err := p.verifyInstalled(ctx, app.AppName); err != nil {
+			return err
+		}
+		return p.verifyPayloadLanded(app.AppName, volume, expectedVersion)
+	}); err != nil {
+		_ = stream.sendError(err.Error())
+		return
+	}
+
+	if !p.startAndConfirm(ctx, stream, app) {
+		return
+	}
+
+	// 本机安装计数（与 runStandard 一致，对应一次本地 FPK 安装）。
+	if p.configMgr != nil {
+		local := p.configMgr.Get()
+		if local.LocalInstalls == nil {
+			local.LocalInstalls = make(map[string]int)
+		}
+		local.LocalInstalls[app.AppName]++
+		_ = p.configMgr.SaveConfig(local)
+	}
+
+	_ = refreshFn(ctx)
+
+	_ = stream.sendProgress(progressPayload{Step: "done", NewVersion: expectedVersion, Message: "安装完成"})
+}
+
 func (p *installPipeline) runSelfUpdate(ctx context.Context, stream *sseStream, app core.AppInfo) {
 	// 版本门槛（最后防线）：可用版本必须严格高于已装版本。
 	// 内置目录可能收录商店自己的旧版本（conversun/fnos-apps apps.json 里有

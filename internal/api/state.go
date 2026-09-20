@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fnos-store/internal/cache"
@@ -121,6 +122,11 @@ func (s *Server) refreshRegistry(ctx context.Context) error {
 			log.Printf("refresh: all %d custom sources failed; keeping previous registry to avoid losing external catalog", len(customStatus))
 		} else {
 			s.registry.Merge(localApps, remoteApps, installedTags)
+			// Merge 从零重建注册表，官方开发者/发布者/描述回填标记随之失效，
+			// 必须清空——否则上一进程/上一轮已拉过的应用会永久跳过、字段恒空。
+			if len(s.officialDetailFetched) > 0 {
+				s.officialDetailFetched = make(map[string]bool)
+			}
 		}
 	}
 	s.lastCheck = now
@@ -129,6 +135,16 @@ func (s *Server) refreshRegistry(ctx context.Context) error {
 		s.sourceStatus[id] = st
 	}
 	s.mu.Unlock()
+
+	// 官方应用开发者/发布者：面板 app/list 不带这两个字段，只能逐条
+	// app/detail 拉。后台增量补全（只拉还没有 Maintainer 的条目），
+	// 不阻塞本次目录刷新；面板未配置/未启用时跳过。
+	if s.panelClient != nil && s.panelClient.Configured() {
+		go s.enrichOfficialMeta()
+	}
+
+	// 自动监测：空/失败源沉底，连续 5 次无应用自动关闭（内部读 sourceStatus）。
+	s.applySourceAutoCare()
 
 	if s.cacheStore != nil {
 		s.cacheStore.SetLastCheckAt(now)
@@ -233,6 +249,17 @@ func (s *Server) getRegistryApp(name string) (core.AppInfo, bool) {
 	return s.registry.Get(name)
 }
 
+// getRegistryAppFold 大小写不敏感查询（FPK 直接安装用：manifest appname
+// 与注册表条目大小写可能不一致）。
+func (s *Server) getRegistryAppFold(name string) (core.AppInfo, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.registry == nil {
+		return core.AppInfo{}, false
+	}
+	return s.registry.GetFold(name)
+}
+
 // getRegistryBest 跨源取同名条目中版本最高者（自更新路径专用，见 Registry.GetBest）。
 func (s *Server) getRegistryBest(name string) (core.AppInfo, bool) {
 	s.mu.RLock()
@@ -323,6 +350,25 @@ func (s *Server) fetchCustomSources(ctx context.Context) ([]source.RemoteApp, ma
 	s.mu.RLock()
 	srcs := s.customSources
 	s.mu.RUnlock()
+	if len(srcs) == 0 {
+		return nil, nil
+	}
+
+	// 已关闭的源不再抓取（自动监测沉底/自动关闭的源不浪费抓取预算）
+	enabled := map[string]bool{}
+	if s.configMgr != nil {
+		cfg := s.configMgr.Get()
+		for _, e := range cfg.Sources {
+			enabled[e.ID] = e.IsEnabled()
+		}
+	}
+	fetchSrcs := make([]*source.FNDepotSource, 0, len(srcs))
+	for _, cs := range srcs {
+		if len(enabled) == 0 || enabled[cs.ID()] {
+			fetchSrcs = append(fetchSrcs, cs)
+		}
+	}
+	srcs = fetchSrcs
 	if len(srcs) == 0 {
 		return nil, nil
 	}
@@ -505,9 +551,10 @@ func (s *Server) ListSources() []SourceEntry {
 	// 官方应用中心：启用才展示（未启用时目录里没有它，列表里出现反而误导）。
 	if s.panelClient != nil && s.panelClient.Configured() {
 		e := SourceEntry{
-			ID:   source.OfficialSourceID,
-			Name: "官方应用中心",
-			URL:  "builtin://app-center",
+			ID:      source.OfficialSourceID,
+			Name:    "官方应用中心",
+			URL:     "builtin://app-center",
+			Enabled: true,
 		}
 		if st, ok := status[source.OfficialSourceID]; ok {
 			e.AppCount = st.AppCount
@@ -518,9 +565,11 @@ func (s *Server) ListSources() []SourceEntry {
 	}
 	for _, entry := range cfg.Sources {
 		e := SourceEntry{
-			ID:   entry.ID,
-			Name: entry.Name,
-			URL:  entry.URL,
+			ID:          entry.ID,
+			Name:        entry.Name,
+			URL:         entry.URL,
+			Enabled:     entry.IsEnabled(),
+			EmptyStreak: entry.EmptyStreak,
 		}
 		if cs, ok := byID[entry.ID]; ok {
 			meta := cs.Meta()
@@ -536,4 +585,69 @@ func (s *Server) ListSources() []SourceEntry {
 		entries = append(entries, e)
 	}
 	return entries
+}
+
+// enrichOfficialMeta 增量拉取官方应用的开发者/发布者/描述（app/detail）。
+// 面板 app/list 不带这些字段（355 条实测只有 appName/name/tags/…），
+// 只能逐条 app/detail。8 并发、整体 3 分钟预算；单条失败静默跳过，
+// 下次刷新补拉（只拉还缺字段的条目，增量成本趋零）。拉过的应用记入
+// officialDetailFetched——面板某字段真为空时不再重复拉。
+func (s *Server) enrichOfficialMeta() {
+	var pending []string
+	s.mu.RLock()
+	if s.registry != nil {
+		for _, app := range s.registry.List() {
+			if app.Source != source.OfficialSourceID {
+				continue
+			}
+			if s.officialDetailFetched[app.AppName] {
+				continue
+			}
+			if app.Maintainer == "" || app.Description == "" {
+				pending = append(pending, app.AppName)
+			}
+		}
+	}
+	s.mu.RUnlock()
+	if len(pending) == 0 {
+		return
+	}
+
+	// 10 分钟预算：面板 app/detail 实测 0.15~5s/条，355 条 8 并发最坏
+	// 也要 3~4 分钟；3 分钟会在面板变慢时截断（实测 140/355 后 ctx 取消）。
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	var done int64
+	for _, name := range pending {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			detail, err := s.panelClient.AppDetail(ctx, name)
+			if err != nil {
+				return // 未标记 fetched，下次刷新重试
+			}
+			md := detail.AppDetail
+			s.mu.Lock()
+			if s.registry != nil {
+				if md.Maintainer != "" || md.Distributor != "" {
+					s.registry.SetOfficialMeta(name, md.Maintainer, md.MaintainerURL, md.Distributor, md.DistributorURL)
+				}
+				if md.Desc != "" {
+					s.registry.SetOfficialDescription(name, md.Desc)
+				}
+			}
+			s.officialDetailFetched[name] = true
+			s.mu.Unlock()
+			atomic.AddInt64(&done, 1)
+		}(name)
+	}
+	wg.Wait()
+	if done > 0 {
+		log.Printf("official meta: enriched %d/%d apps from panel detail", done, len(pending))
+	}
 }

@@ -41,6 +41,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -148,6 +149,31 @@ type PanelAppDetail struct {
 	Poster []string `json:"poster"`
 }
 
+// WizardParam is one answer to an app's install wizard, in the exact
+// {key,value} shape the panel's install/task accepts (name/value and
+// paramKey/paramValue are both rejected with code 10030).
+type WizardParam struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// InstallInfoWizard is the wizardInfo sub-object of GET
+// /app-center/v1/install/info. WizardContent is the raw form definition
+// (same item shape as the FPK's fnos/wizard/install), passed through
+// untouched so the UI can render whatever field types fnOS supports.
+type InstallInfoWizard struct {
+	HasWizard     bool            `json:"hasWizard"`
+	WizardContent json.RawMessage `json:"wizardContent"`
+}
+
+// InstallInfo is the response of GET /app-center/v1/install/info.
+// NOTE: the panel only answers this for a package that has already been
+// downloaded (otherwise it replies 10100 package-not-found). Callers must
+// run download/task first — mirroring the native App Center's own flow.
+type InstallInfo struct {
+	WizardInfo InstallInfoWizard `json:"wizardInfo"`
+}
+
 // DownloadStatus is GET /app-center/v1/download/status.
 type DownloadStatus struct {
 	Status   int     `json:"status"` // 1=running 2=success 3=failed
@@ -206,6 +232,17 @@ func (c *Client) Invalidate() {
 
 func (c *Client) cookieLocked() string { return c.cookie }
 
+// ErrEndpointNotFound marks a panel HTTP 404: the panel build in front of us
+// has no such endpoint (e.g. an older panel without install/info). Callers
+// can degrade gracefully instead of failing the whole operation.
+var ErrEndpointNotFound = errors.New("面板端点不存在")
+
+// DoJSON is a public passthrough of the authenticated JSON request path,
+// for API exploration / debugging (e.g. probing undocumented endpoints).
+func (c *Client) DoJSON(ctx context.Context, method, path string, query url.Values, body any) (json.RawMessage, error) {
+	return c.doJSON(ctx, method, path, query, body)
+}
+
 // doJSON performs an authenticated JSON request, re-logging in once on
 // auth failure. respRaw is the response body (empty for 2xx-with-no-body).
 func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, body any) (json.RawMessage, error) {
@@ -252,6 +289,9 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
+			if resp.StatusCode == http.StatusNotFound {
+				return nil, fmt.Errorf("%w: %s", ErrEndpointNotFound, truncate(string(raw), 200))
+			}
 			return nil, fmt.Errorf("面板 HTTP %d: %s", resp.StatusCode, truncate(string(raw), 200))
 		}
 		var env struct {
@@ -297,6 +337,41 @@ func truncate(s string, n int) string {
 // diagnostics; production paths use the typed methods below.
 func (c *Client) RawJSON(ctx context.Context, method, path string, query url.Values, body any) (json.RawMessage, error) {
 	return c.doJSON(ctx, method, path, query, body)
+}
+
+// FileDownloadTask 把一个本地 FPK 文件登记到面板官方下载系统（app-center
+// 下载通道，与官方应用中心安装本地包用的是同一机制，fndepot 安装第三方
+// FPK 时即走此通道）。返回下载任务 ID（形如 file_<ts>）。
+//
+// 注意：面板的「下载中心」（appcgi.downloadcenter.*）是独立封闭通道，
+// 其 WS 会话授权只认面板桌面主连接（2026-09-20 实测：login/active/
+// authToken/tokenLogin/cookie 各组合对第三方进程一律 errno 65534），
+// 本方法走的是官方 app-center HTTP 下载系统，文件会进入面板下载缓存
+// （/vol*/appcenter-downloads），可供面板或 New Store 直接安装复用。
+func (c *Client) FileDownloadTask(ctx context.Context, path string) (string, error) {
+	if err := c.EnsureLoggedIn(ctx); err != nil {
+		return "", err
+	}
+	data, err := c.doJSON(ctx, http.MethodPost, "/app-center/v1/download/task", nil,
+		map[string]any{"packageSourceType": "file", "path": path, "language": "zh-CN"})
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		DownloadTaskID string `json:"downloadTaskId"`
+		TaskID         string `json:"taskId"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return "", fmt.Errorf("解析面板响应失败: %w", err)
+	}
+	id := out.DownloadTaskID
+	if id == "" {
+		id = out.TaskID
+	}
+	if id == "" {
+		return "", errors.New("面板未返回下载任务 ID")
+	}
+	return id, nil
 }
 
 // AppList fetches the full official catalog (single page, ~355 entries).
@@ -364,8 +439,28 @@ func (c *Client) DownloadStatus(ctx context.Context, downloadTaskID string) (*Do
 	return &st, nil
 }
 
+// InstallInfo fetches an app's install-time wizard definition.
+// The package must have been downloaded first (see InstallInfo docs).
+func (c *Client) InstallInfo(ctx context.Context, appName, version string) (*InstallInfo, error) {
+	data, err := c.doJSON(ctx, http.MethodGet, "/app-center/v1/install/info",
+		url.Values{"appName": {appName}, "version": {version}, "language": {"zh-CN"}}, nil)
+	if err != nil {
+		return nil, err
+	}
+	var info InstallInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, fmt.Errorf("解析安装信息失败: %w", err)
+	}
+	return &info, nil
+}
+
 // InstallTask submits the install task for a cloud package.
-func (c *Client) InstallTask(ctx context.Context, appName, version string, volumeID int) (string, error) {
+// customParams carries the user's install-wizard answers (may be empty for
+// apps whose wizard has no required fields).
+func (c *Client) InstallTask(ctx context.Context, appName, version string, volumeID int, customParams []WizardParam) (string, error) {
+	if customParams == nil {
+		customParams = []WizardParam{}
+	}
 	body := map[string]any{
 		"appName":     appName,
 		"version":     version,
@@ -377,7 +472,7 @@ func (c *Client) InstallTask(ctx context.Context, appName, version string, volum
 			"immediateStart":   true,
 			"apiScope":         map[string]any{},
 		},
-		"customParameters": []any{},
+		"customParameters": customParams,
 		"language":         "zh-CN",
 	}
 	data, err := c.doJSON(ctx, http.MethodPost, "/app-center/v1/install/task", nil, body)

@@ -26,6 +26,9 @@ type SourceEntry struct {
 	AppCount    int       `json:"app_count"`
 	Error       string    `json:"error,omitempty"`
 	LastFetched time.Time `json:"last_fetched,omitempty"`
+	Enabled     bool      `json:"enabled"`
+	// EmptyStreak 连续「抓取失败或 0 应用」次数（自动监测：达到阈值自动关闭）
+	EmptyStreak int `json:"empty_streak,omitempty"`
 }
 
 func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
@@ -414,4 +417,184 @@ func (s *Server) handleSyncSourceList(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	res := s.syncSourceList(ctx, true)
 	writeJSON(w, http.StatusOK, res)
+}
+
+// ── 源的开关 / 手动排序 / 自动监测（空源沉底 + 连续无应用自动关闭） ─────
+
+const autoDisableEmptyStreak = 5 // 连续 N 次「抓取失败或 0 应用」→ 自动关闭源
+
+// applySourceAutoCare 每次目录刷新后调用：
+//  1) 更新每个启用源的连续空/失败计数，达到阈值自动关闭；
+//  2) 重排：有应用的源在前（保持相对顺序），无应用/失败/已关闭的沉底。
+//
+// 用户手动排序在「有应用的源」之间长期生效；空源被手动拖到前面也会在
+// 下次刷新时自动沉底（自动监测的语义），连续 5 次后自动关闭。
+func (s *Server) applySourceAutoCare() {
+	if s.configMgr == nil {
+		return
+	}
+	cfg0 := s.configMgr.Get()
+	if cfg0.SourceAutoCareDisabled {
+		return // 「应用源自动监测」已关闭：不计数、不自动关闭、不沉底
+	}
+	s.mu.RLock()
+	status := s.sourceStatus
+	s.mu.RUnlock()
+
+	cfg := s.configMgr.Get()
+	changed := false
+
+	// 1) 连续计数 + 自动关闭
+	for i := range cfg.Sources {
+		src := &cfg.Sources[i]
+		if !src.IsEnabled() {
+			if src.EmptyStreak != 0 {
+				src.EmptyStreak = 0 // 关闭期间不累计；重新启用从 0 开始
+				changed = true
+			}
+			continue
+		}
+		st, ok := status[src.ID]
+		if !ok {
+			continue // 本轮未抓取（如刚添加），不动
+		}
+		if st.Error == "" && st.AppCount > 0 {
+			if src.EmptyStreak != 0 {
+				src.EmptyStreak = 0
+				changed = true
+			}
+		} else {
+			src.EmptyStreak++
+			changed = true
+			if src.EmptyStreak >= autoDisableEmptyStreak {
+				off := false
+				src.Enabled = &off
+				log.Printf("source auto-disabled: %s (%s) 连续 %d 次无应用，已自动关闭", src.Name, src.URL, src.EmptyStreak)
+			}
+		}
+	}
+
+	// 2) 沉底重排：有应用在前（保持相对顺序），其余（无应用/失败/关闭）在后
+	var withApps, rest []config.CustomSource
+	for _, src := range cfg.Sources {
+		st, ok := status[src.ID]
+		if ok && st.Error == "" && st.AppCount > 0 {
+			withApps = append(withApps, src)
+		} else {
+			rest = append(rest, src)
+		}
+	}
+	if len(withApps) > 0 && (len(rest) == 0 || !sourcesEqualOrder(append(withApps, rest...), cfg.Sources)) {
+		cfg.Sources = append(withApps, rest...)
+		changed = true
+	}
+
+	if changed {
+		if err := s.configMgr.SaveConfig(cfg); err != nil {
+			log.Printf("source auto-care: save failed: %v", err)
+			return
+		}
+		s.rebuildCustomSources()
+	}
+}
+
+// sourcesEqualOrder 判断 a 是否是 b 的重新排列（内容相同的元素序列顺序是否一致）。
+func sourcesEqualOrder(a, b []config.CustomSource) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID || a[i].URL != b[i].URL {
+			return false
+		}
+	}
+	return true
+}
+
+// handleToggleSource 开启/关闭单个自定义源。
+func (s *Server) handleToggleSource(w http.ResponseWriter, r *http.Request) {
+	if s.configMgr == nil {
+		writeAPIError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	id := r.PathValue("id")
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if id == source.OfficialSourceID {
+		writeAPIError(w, http.StatusBadRequest, "官方应用中心在「系统设置 → 官方应用中心」开关控制")
+		return
+	}
+
+	cfg := s.configMgr.Get()
+	found := false
+	for i := range cfg.Sources {
+		if cfg.Sources[i].ID == id {
+			found = true
+			state := req.Enabled
+			cfg.Sources[i].Enabled = &state
+			cfg.Sources[i].EmptyStreak = 0 // 重新启用从 0 计数
+			break
+		}
+	}
+	if !found {
+		writeAPIError(w, http.StatusNotFound, "应用源不存在")
+		return
+	}
+	if err := s.configMgr.SaveConfig(cfg); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.rebuildCustomSources()
+	go s.refreshRegistryDebounced(context.Background())
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id, "enabled": req.Enabled})
+}
+
+// handleReorderSources 手动排序自定义源（官方源固定置顶，不参与排序）。
+func (s *Server) handleReorderSources(w http.ResponseWriter, r *http.Request) {
+	if s.configMgr == nil {
+		writeAPIError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	var req struct {
+		Order []string `json:"order"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+
+	cfg := s.configMgr.Get()
+	byID := make(map[string]config.CustomSource, len(cfg.Sources))
+	for _, e := range cfg.Sources {
+		byID[e.ID] = e
+	}
+	if len(req.Order) != len(byID) {
+		writeAPIError(w, http.StatusBadRequest, "排序列表与现有应用源不一致")
+		return
+	}
+	seen := make(map[string]bool, len(req.Order))
+	newOrder := make([]config.CustomSource, 0, len(req.Order))
+	for _, id := range req.Order {
+		e, ok := byID[id]
+		if !ok || seen[id] {
+			writeAPIError(w, http.StatusBadRequest, "排序列表包含未知或重复的应用源")
+			return
+		}
+		seen[id] = true
+		newOrder = append(newOrder, e)
+	}
+	if !sourcesEqualOrder(newOrder, cfg.Sources) {
+		cfg.Sources = newOrder
+		if err := s.configMgr.SaveConfig(cfg); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	s.rebuildCustomSources()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

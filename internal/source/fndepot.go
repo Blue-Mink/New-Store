@@ -604,7 +604,9 @@ func translateFndepotApp(appName string, entry fndepotAppEntry, baseURL, sourceN
 		DisplayName:    displayName,
 		Version:        sel.version,
 		FpkVersion:     sel.version,
-		Description:    stripHTML(entry.Desc),
+		// desc 原样保留（允许 HTML，如 QQ 群超链接）：列表侧由前端
+		// descriptionPlainText 纯文本化，详情页按富文本渲染（链接可点）。
+		Description:    strings.TrimSpace(entry.Desc),
 		HomepageURL:    firstNonEmpty(entry.Homepage, entry.MaintainerURL, entry.BugReportURL),
 		UpdatedAt:      sel.updatedAt,
 		ServicePort:    port,

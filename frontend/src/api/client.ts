@@ -217,7 +217,13 @@ function streamSSE(url: string, onEvent: SSECallback): SSEHandle {
   const promise = (async () => {
     const response = await fetch(url, { method: 'POST', signal: controller.signal });
     if (!response.ok) {
-      throw new Error(`Request failed: ${response.statusText}`);
+      // 后端错误体是 JSON {error: "..."}（如"应用已安装"），优先展示具体原因。
+      let detail = `Request failed: ${response.statusText}`;
+      try {
+        const j = await response.json();
+        if (j && (j.error || j.message)) detail = j.error || j.message;
+      } catch { /* 非 JSON 错误体，沿用 statusText */ }
+      throw new Error(detail);
     }
 
     const reader = response.body?.getReader();
@@ -336,6 +342,10 @@ export const installApp = (appname: string, onEvent: SSECallback, wizard?: Wizar
   return streamSSE(apiUrl(`/api/apps/${appname}/install${qs}`), onEvent);
 };
 
+/** 「下载 fpk」：后端按镜像链下载 FPK 到本地缓存，并登记进面板官方下载通道（SSE 进度）。 */
+export const downloadFpk = (appname: string, onEvent: SSECallback): SSEHandle =>
+  streamSSE(apiUrl(`/api/apps/${appname}/download-task`), onEvent);
+
 /** 官方应用详情页 + 依赖弹窗数据（面板实时状态 + 商店目录同名条目）。 */
 export interface PanelDep {
   sourceID: string;
@@ -447,6 +457,9 @@ export interface Settings {
   // 内置源列表自动同步（空/缺省 = 内置默认列表地址）
   source_list_url?: string;
   source_list_disabled?: boolean;
+  // FPK 下载目录 + 应用源自动监测（缺省 = 目录默认 / 监测开启）
+  download_dir?: string;
+  source_auto_care_disabled?: boolean;
   // 官方应用中心直连（面板账号）
   panel_enabled?: boolean;
   panel_username?: string;
@@ -544,6 +557,10 @@ export interface SourceEntry {
   app_count: number;
   error?: string;
   last_fetched?: string;
+  /** 源是否启用（关闭后不再抓取）；内置官方源恒为 true */
+  enabled?: boolean;
+  /** 连续「抓取失败或 0 应用」次数（自动监测：连续 5 次自动关闭） */
+  empty_streak?: number;
 }
 
 export interface SourcesResponse {
@@ -634,6 +651,107 @@ export const removeSource = async (id: string): Promise<void> => {
   }
 };
 
+/** 开启/关闭应用源（关闭后不再抓取，其应用从目录移除）。 */
+export const toggleSource = async (id: string, enabled: boolean): Promise<void> => {
+  const response = await fetch(apiUrl(`/api/sources/${encodeURIComponent(id)}/toggle`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!response.ok) {
+    throw new Error(await extractError(response, `切换应用源状态失败: ${response.statusText}`));
+  }
+};
+
+/** 已下载的 FPK 缓存条目。 */
+export interface FpkDownloadFile {
+  name: string;
+  size: number;
+  mod_at: string;
+  /** FPK 清单里的 appname（解析失败为空）。 */
+  appname?: string;
+  /** 该应用当前是否已安装（含官方中心/其他方式安装）。 */
+  installed?: boolean;
+}
+
+/**
+ * 应用源显示名：官方应用中心 → 中文，内置目录（原 fnos-store 源）→ "fnos-store"，
+ * 外部 FnDepot 源用其显示名。搜索/筛选/徽章统一走这里。
+ */
+export const sourceLabel = (app: AppInfo): string => {
+  switch (app.source) {
+    case 'fnos-official': return '飞牛应用中心源';
+    case 'fnos-apps': return 'fnos-store';
+    default: return app.source || '';
+  }
+};
+
+/** 开发者显示名：内置目录（fnos-apps）的应用统一显示为 conversun。 */
+export const effectiveMaintainer = (app: AppInfo): string =>
+  app.maintainer || (app.source === 'fnos-apps' ? 'conversun' : '');
+
+/**
+ * 把可能混有 HTML 片段的描述文本转成纯文本（列表卡/行列表按纯文本渲染）。
+ * 部分官方应用 desc 里带 <h1>/<p>/<strong> 等标签，直接插会露出标签；
+ * 去标签 + 解码常见实体 + 折叠空白。
+ */
+export const descriptionPlainText = (t: string): string => {
+  if (!t) return '';
+  let s = t;
+  if (/<[a-z][\s\S]*?>/i.test(s)) {
+    s = s
+      .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+      .replace(/<\s*\/\s*(p|div|li|h[1-6]|tr|blockquote)\s*>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ');
+  }
+  s = s
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{2,}/g, '\n');
+  return s.trim();
+};
+
+/** FPK 下载目录 + 已下载列表（设置页「FPK 下载目录」同步展示）。 */
+export const fetchFpkDownloads = async (): Promise<{ dir: string; files: FpkDownloadFile[] }> => {
+  const response = await fetch(apiUrl('/api/fpk-downloads'));
+  if (!response.ok) {
+    throw new Error(await extractError(response, `获取 FPK 下载列表失败: ${response.statusText}`));
+  }
+  return response.json();
+};
+
+/** 删除单个已下载 FPK 缓存。 */
+export const deleteFpkDownload = async (name: string): Promise<void> => {
+  const response = await fetch(apiUrl(`/api/fpk-downloads/${encodeURIComponent(name)}`), {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw new Error(await extractError(response, `删除 FPK 缓存失败: ${response.statusText}`));
+  }
+};
+
+/** 直接安装已下载的 FPK 缓存（SSE 进度流；不重新下载，文件保留在缓存中）。 */
+export const installFpkDownload = (name: string, onEvent: SSECallback): SSEHandle => {
+  return streamSSE(apiUrl(`/api/fpk-downloads/${encodeURIComponent(name)}/install`), onEvent);
+};
+
+/** 手动排序应用源（传全部自定义源 ID 的新顺序；官方源固定置顶不受影响）。 */
+export const reorderSources = async (order: string[]): Promise<void> => {
+  const response = await fetch(apiUrl('/api/sources/reorder'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ order }),
+  });
+  if (!response.ok) {
+    throw new Error(await extractError(response, `排序应用源失败: ${response.statusText}`));
+  }
+};
+
 /** 应用详情页资源（README / 预览图）的代理地址，走后端镜像链。 */
 export const assetUrl = (appname: string, type: 'readme' | 'preview', index?: number): string =>
   apiUrl(`/api/apps/${encodeURIComponent(appname)}/asset?type=${type}${index != null ? `&index=${index}` : ''}`);
@@ -657,7 +775,7 @@ export const fetchSettings = async (): Promise<Settings> => {
   return response.json();
 };
 
-export const updateSettings = async (settings: { check_interval_hours: number; mirror: string; docker_mirror: string; custom_github_mirror?: string; custom_docker_mirror?: string; install_volume: number; source_list_url?: string; source_list_disabled?: boolean; panel_enabled?: boolean; panel_username?: string; panel_password?: string; panel_base_url?: string; panel_clear_password?: boolean }): Promise<void> => {
+export const updateSettings = async (settings: { check_interval_hours: number; mirror: string; docker_mirror: string; custom_github_mirror?: string; custom_docker_mirror?: string; install_volume: number; source_list_url?: string; source_list_disabled?: boolean; download_dir?: string; source_auto_care_disabled?: boolean; panel_enabled?: boolean; panel_username?: string; panel_password?: string; panel_base_url?: string; panel_clear_password?: boolean }): Promise<void> => {
   const response = await fetch(apiUrl('/api/settings'), {
     method: 'PUT',
     headers: {

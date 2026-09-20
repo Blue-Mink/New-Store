@@ -20,6 +20,136 @@ PID_FILE="${TRIM_PKGVAR}/${TRIM_APPNAME}.pid"
 
 SVC_WAIT_TIMEOUT=15
 
+# ── Web 端口闭环（native-web-port-flow）──────────────────────────────
+# 安装向导/应用设置向导可修改端口（wizard_access_port），默认 38011。
+# 单一事实源：${TRIM_PKGETC}/ports.conf；.sc 端口转发 / manifest service_port /
+# ui/config 桌面入口 / AppCenter DB（service_url）全部同步。
+DEFAULT_PORT=38011
+PKG_ETC="${TRIM_PKGETC:-/var/apps/${TRIM_APPNAME}/etc}"
+PORTS_CONF="${PKG_ETC}/ports.conf"
+
+# 读当前端口：TRIM_SERVICE_PORT（应用中心注入）→ ports.conf → 已安装 ui/config → 默认
+read_web_port()
+{
+    local p="" uic
+    case "${TRIM_SERVICE_PORT:-}" in
+        ''|*[!0-9]*) p="" ;;
+        *) p="${TRIM_SERVICE_PORT}" ;;
+    esac
+    if [ -z "${p}" ] && [ -r "${PORTS_CONF}" ]; then
+        p=$(grep -E "^WEB_PORT=" "${PORTS_CONF}" 2>/dev/null | tail -n1 | cut -d= -f2 | tr -d '[:space:]')
+    fi
+    case "${p}" in ''|*[!0-9]*) p="" ;; esac
+    if [ -z "${p}" ]; then
+        uic="${TRIM_APPDEST}/ui/config"
+        if [ -r "${uic}" ]; then
+            p=$(grep -oE "\"port\"[[:space:]]*:[[:space:]]*\"[0-9]+\"" "${uic}" 2>/dev/null | head -n1 | grep -oE "[0-9]+")
+        fi
+    fi
+    case "${p}" in ''|*[!0-9]*) p="${DEFAULT_PORT}" ;; esac
+    echo "${p}"
+}
+
+# 校验端口：纯数字且 1024-65535
+validate_port()
+{
+    local p="$1"
+    case "${p}" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "${p}" -ge 1024 ] 2>/dev/null && [ "${p}" -le 65535 ] 2>/dev/null || return 1
+    return 0
+}
+
+# 同步 AppCenter DB（「打开」按钮/服务入口指向新端口）——与 KSpeeder 同款写法
+# $1=端口  $2=status（running=同时置状态；空=不动状态字段）
+# URL 里的 ${host} 用 SQL 侧 chr(36) 拼，保持字面量交给面板解析
+sync_appcenter_db()
+{
+    local port="$1" status_sql=""
+    [ "${2:-}" = "running" ] && status_sql="status='running',"
+    if ! command -v psql >/dev/null 2>&1; then
+        return 0
+    fi
+    psql -h /var/run/postgresql -d appcenter -U postgres -v ON_ERROR_STOP=0 >/dev/null 2>&1 <<SQL || \
+        echo "sync_appcenter_db: psql 失败 (port=${port})" >> "${LOG_FILE}" 2>/dev/null
+UPDATE app
+   SET ${status_sql}
+       service_url='http://' || chr(36) || '{host}:${port}/',
+       updated_at=now()
+ WHERE app_name='${TRIM_APPNAME}';
+UPDATE app_service
+   SET url='http://' || chr(36) || '{host}:${port}/',
+       default_url='http://' || chr(36) || '{host}:${port}/',
+       updated_at=now()
+ WHERE app_id=(SELECT id FROM app WHERE app_name='${TRIM_APPNAME}' LIMIT 1);
+INSERT INTO system_config(type,k,v)
+SELECT 'appAutoUpdate','${TRIM_APPNAME}','false'
+WHERE NOT EXISTS (SELECT 1 FROM system_config WHERE type='appAutoUpdate' AND k='${TRIM_APPNAME}');
+SQL
+    return 0
+}
+
+# 以应用中心同一权限上下文重启服务（config_callback 用；显式传 TRIM_SERVICE_PORT）
+restart_service()
+{
+    local main_script=""
+    for main_script in "/var/apps/${TRIM_APPNAME}/cmd/main" "${TRIM_APPDEST}/cmd/main" "${TRIM_APPDEST}/target/cmd/main"; do
+        [ -x "${main_script}" ] && break
+    done
+    [ -n "${main_script}" ] && [ -x "${main_script}" ] || return 0
+    TRIM_APPNAME="${TRIM_APPNAME}" TRIM_APPDEST="${TRIM_APPDEST}" \
+    TRIM_PKGETC="${PKG_ETC}" TRIM_PKGVAR="${TRIM_PKGVAR}" \
+    TRIM_SERVICE_PORT="${1:-}" "${main_script}" stop >/dev/null 2>&1 || true
+    sleep 1
+    TRIM_APPNAME="${TRIM_APPNAME}" TRIM_APPDEST="${TRIM_APPDEST}" \
+    TRIM_PKGETC="${PKG_ETC}" TRIM_PKGVAR="${TRIM_PKGVAR}" \
+    TRIM_SERVICE_PORT="${1:-}" "${main_script}" start >/dev/null 2>&1 || true
+    return 0
+}
+
+# 应用端口：写 ports.conf + 同步 .sc / manifest / ui/config / AppCenter DB
+apply_port()
+{
+    local port="$1" status="${2:-}"
+    if ! validate_port "${port}"; then
+        echo "端口无效：${port}（必须是 1024-65535 的数字）" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
+        return 1
+    fi
+
+    # 1) ports.conf（单一事实源）
+    if [ -d "${PKG_ETC}" ] || mkdir -p "${PKG_ETC}" 2>/dev/null; then
+        printf 'WEB_PORT=%s\n' "${port}" > "${PORTS_CONF}"
+    fi
+
+    # 2) .sc 端口转发（应用目录 + port-config 协议文件副本）
+    local sc
+    for sc in "${TRIM_APPDEST}/${TRIM_APPNAME}.sc" "${PKG_ETC}/${TRIM_APPNAME}.sc" "${FWPORTS_FILE}"; do
+        if [ -f "${sc}" ]; then
+            sed -i "s|^src\.ports=.*|src.ports=\"${port}/tcp\"|" "${sc}"
+            sed -i "s|^dst\.ports=.*|dst.ports=\"${port}/tcp\"|" "${sc}"
+        fi
+    done
+
+    # 3) manifest service_port（应用中心端口登记基准；系统在 /var/apps 下保留一份）
+    local mf
+    for mf in "${TRIM_APPDEST}/manifest" "/var/apps/${TRIM_APPNAME}/manifest"; do
+        if [ -f "${mf}" ]; then
+            sed -i -E "s|^(service_port[[:space:]]*=).*|\1 ${port}|" "${mf}"
+        fi
+    done
+
+    # 4) ui/config 桌面 .url 入口端口（匹配任意旧值，含空值）
+    local uic="${TRIM_APPDEST}/ui/config"
+    if [ -f "${uic}" ]; then
+        sed -i -E "s|(\"port\"[[:space:]]*:[[:space:]]*\")([^\"]*)(\")|\1${port}\3|" "${uic}"
+    fi
+
+    # 5) AppCenter DB
+    sync_appcenter_db "${port}" "${status}"
+    return 0
+}
+
 SVC_CWD="${TRIM_PKGVAR}"
 SVC_BACKGROUND=y
 SVC_WRITE_PID=y
@@ -206,6 +336,16 @@ install_callback ()
 {
     log_step "install_callback"
     call_func "save_wizard_variables" install_log
+    # 安装向导端口：install-fpk -e / 面板安装传键名不统一，两种都接（wizard_access_port / access_port）
+    local wport="${wizard_access_port:-${access_port:-${DEFAULT_PORT}}}"
+    echo "install wizard port=${wport} (wizard_access_port=${wizard_access_port:-} access_port=${access_port:-})" >> "${LOG_FILE}" 2>/dev/null
+    if ! validate_port "${wport}"; then
+        echo "端口无效：${wport}（必须是 1024-65535 的数字）" > "${TRIM_TEMP_LOGFILE}"
+        exit 1
+    fi
+    apply_port "${wport}"
+    # 应用 DB 行可能在回调之后才由应用中心创建：延迟多次重同步，防被默认值覆盖
+    ( for _d in 3 8 15; do sleep "${_d}"; sync_appcenter_db "${wport}" ""; done ) >/dev/null 2>&1 &
     sync_var_folder
     call_func "service_postinst" install_log
     if [ -n "${LOG_FILE}" ]; then
@@ -274,12 +414,31 @@ config_init ()
 {
     log_step "config_init"
     call_func "service_preconfig" install_log
+    # 应用设置向导回显：输出当前真实端口，覆盖 wizard 里的静态 initValue
+    local _p
+    _p="$(read_web_port 2>/dev/null)"
+    echo "wizard_access_port=${_p}"
     exit 0
 }
 
 config_callback ()
 {
     log_step "config_callback"
+    # 应用设置向导端口（wizard_access_port / access_port 两种键名都接）：校验→应用→重启→DB 重同步
+    local cport="${wizard_access_port:-${access_port:-}}"
+    if [ -n "${cport}" ]; then
+        echo "config wizard port=${cport} (wizard_access_port=${wizard_access_port:-} access_port=${access_port:-})" >> "${LOG_FILE}" 2>/dev/null
+        if ! validate_port "${cport}"; then
+            echo "端口无效：${cport}（必须是 1024-65535 的数字）" > "${TRIM_TEMP_LOGFILE}"
+            exit 1
+        fi
+        apply_port "${cport}"
+        restart_service "${cport}"
+        sync_appcenter_db "${cport}" "running"
+        ( for _d in 3 8 15; do sleep "${_d}"; sync_appcenter_db "${cport}" "running"; done ) >/dev/null 2>&1 &
+        echo "Config updated: Web port=${cport}"
+        echo "New Store 服务已自动重启并同步应用中心端口与「打开」链接。"
+    fi
     call_func "service_postconfig" install_log
     exit 0
 }

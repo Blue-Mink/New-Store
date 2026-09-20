@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { fetchSettings, updateSettings, fetchStoreUpdate, checkMirrors, fetchMirrorHealth, fetchDockerMirrorHealth, testPanelLogin, type MirrorOption, type MirrorCheckResult, type VolumeOption, type MirrorHealth } from '../api/client';
+import { fetchSettings, updateSettings, fetchStoreUpdate, checkMirrors, fetchMirrorHealth, fetchDockerMirrorHealth, testPanelLogin, fetchFpkDownloads, deleteFpkDownload, installFpkDownload, type MirrorOption, type MirrorCheckResult, type VolumeOption, type MirrorHealth, type FpkDownloadFile } from '../api/client';
 import type { StoreUpdateInfo } from '../api/client';
 import {
   Dialog,
@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
-import { ArrowLeft, ChevronsLeft, ChevronsRight, Database, Loader2, RefreshCw, SlidersHorizontal, Zap, MessageCircle } from 'lucide-react'
+import { ArrowLeft, ChevronDown, Database, FolderDown, Loader2, RefreshCw, SlidersHorizontal, Trash2, Zap } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from "@/lib/utils"
 import SourceManager from './SourceManager'
@@ -64,6 +64,7 @@ function latencyText(result: MirrorCheckResult): string {
  * 每源一行（状态点 + 标签 + 「当前」徽标 + 延迟/失败次数），
  * 顶部「立即测速」按钮 + 智能模式提示 + 最近一次自动切换横幅。
  * 列表 = 全部真实镜像（去掉 direct/auto；自定义仅在已配置时显示）。
+ * 监测源列表可折叠（状态持久化），折叠时显示一行健康摘要。
  */
 const MirrorHealthPanel: React.FC<{
   title: string;
@@ -74,6 +75,19 @@ const MirrorHealthPanel: React.FC<{
   refreshing: boolean;
   onRefresh: () => void;
 }> = ({ title, health, options, customConfigured, labelOf, refreshing, onRefresh }) => {
+  const [collapsed, setCollapsed] = React.useState<boolean>(() => {
+    try {
+      return localStorage.getItem(`health-panel-collapsed:${title}`) === 'true';
+    } catch { return false; }
+  });
+  const toggleCollapsed = () => {
+    setCollapsed(prev => {
+      const next = !prev;
+      try { localStorage.setItem(`health-panel-collapsed:${title}`, String(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
   const rows = React.useMemo(() => {
     const statsByKey = new Map((health?.mirrors || []).map((s) => [s.key, s] as const));
     const base = options.filter((o) =>
@@ -91,6 +105,9 @@ const MirrorHealthPanel: React.FC<{
     });
   }, [options, health, customConfigured]);
 
+  const okCount = rows.filter((r) => r.status === 'ok').length;
+  const failCount = rows.filter((r) => r.status === 'fail').length;
+
   return (
     <div className="rounded-xl bg-muted/30 border border-border/20 px-3 py-3">
       <div className="flex items-center justify-between mb-1">
@@ -100,57 +117,78 @@ const MirrorHealthPanel: React.FC<{
             每 {health?.interval_s ? Math.round(health.interval_s / 60) : 5} 分钟自动测速
           </span>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={onRefresh}
-          disabled={refreshing}
-          title="立即测速"
-          aria-label="立即测速"
-        >
-          <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
-        </Button>
-      </div>
-      <p className="text-[11px] text-muted-foreground mb-2.5">
-        下载时自动按健康度选路：快而稳的源优先，失败源自动降权。
-        {health?.selected === 'auto' && '当前为智能模式（自动选最快稳定源）。'}
-      </p>
-      {health?.last_switch && (
-        <div className="mb-2.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-[12px] leading-relaxed text-primary">
-          {health.last_switch.reason}
-          <span className="ml-1 whitespace-nowrap">
-            （{labelOf(health.last_switch.from)} → {labelOf(health.last_switch.to)}）
-          </span>
+        <div className="flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={onRefresh}
+            disabled={refreshing}
+            title="立即测速"
+            aria-label="立即测速"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={toggleCollapsed}
+            title={collapsed ? '展开监测的加速源列表' : '折叠监测的加速源列表'}
+            aria-label={collapsed ? '展开监测的加速源列表' : '折叠监测的加速源列表'}
+          >
+            <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", collapsed && "-rotate-90")} />
+          </Button>
         </div>
-      )}
-      <div className="space-y-1.5">
-        {rows.map((row) => (
-          <div key={row.key} className="flex items-center gap-2 text-[13px]">
-            <span
-              className={cn(
-                "h-2 w-2 rounded-full shrink-0",
-                row.status === 'ok' && "bg-emerald-500",
-                row.status === 'fail' && "bg-red-500",
-                !row.status && "bg-muted-foreground/30"
-              )}
-            />
-            <span className="flex-1 truncate">{row.label}</span>
-            {row.key === health?.active && (
-              <span className="shrink-0 rounded-full bg-primary/10 px-1.5 h-5 flex items-center text-[10px] font-medium text-primary">
-                当前
-              </span>
-            )}
-            <span className="shrink-0 w-[72px] text-right text-[11px] tabular-nums text-muted-foreground">
-              {row.status === 'ok'
-                ? `${row.latency_ms}ms`
-                : row.status === 'fail'
-                  ? row.consec_fails > 1 ? `失败×${row.consec_fails}` : '失败'
-                  : '未测速'}
-            </span>
-          </div>
-        ))}
       </div>
+      {collapsed ? (
+        <p className="text-[11px] text-muted-foreground">
+          已监测 {rows.length} 个源：{okCount} 正常{failCount > 0 ? `，${failCount} 失败` : ''}
+          {health?.active && health.active !== 'direct' && `，当前：${labelOf(health.active)}`}
+        </p>
+      ) : (
+        <>
+          <p className="text-[11px] text-muted-foreground mb-2.5">
+            下载时自动按健康度选路：快而稳的源优先，失败源自动降权。
+            {health?.selected === 'auto' && '当前为智能模式（自动选最快稳定源）。'}
+          </p>
+          {health?.last_switch && (
+            <div className="mb-2.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-[12px] leading-relaxed text-primary">
+              {health.last_switch.reason}
+              <span className="ml-1 whitespace-nowrap">
+                （{labelOf(health.last_switch.from)} → {labelOf(health.last_switch.to)}）
+              </span>
+            </div>
+          )}
+          <div className="space-y-1.5">
+            {rows.map((row) => (
+              <div key={row.key} className="flex items-center gap-2 text-[13px]">
+                <span
+                  className={cn(
+                    "h-2 w-2 rounded-full shrink-0",
+                    row.status === 'ok' && "bg-emerald-500",
+                    row.status === 'fail' && "bg-red-500",
+                    !row.status && "bg-muted-foreground/30"
+                  )}
+                />
+                <span className="flex-1 truncate">{row.label}</span>
+                {row.key === health?.active && (
+                  <span className="shrink-0 rounded-full bg-primary/10 px-1.5 h-5 flex items-center text-[10px] font-medium text-primary">
+                    当前
+                  </span>
+                )}
+                <span className="shrink-0 w-[72px] text-right text-[11px] tabular-nums text-muted-foreground">
+                  {row.status === 'ok'
+                    ? `${row.latency_ms}ms`
+                    : row.status === 'fail'
+                      ? row.consec_fails > 1 ? `失败×${row.consec_fails}` : '失败'
+                      : '未测速'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 };
@@ -168,23 +206,6 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
   onStoreUpdate,
   onCatalogChanged,
 }) => {
-  // ── 页内侧栏：两 tab + 展开/收起（持久化） ────────────────────────────
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem('settings-sidebar-collapsed');
-      if (saved === 'true') return true;
-      if (saved === 'false') return false;
-    } catch { /* ignore */ }
-    // 默认：移动端收起（68px 图标栏）、桌面端展开
-    return window.innerWidth < 768;
-  });
-  const toggleSidebar = () => {
-    setSidebarCollapsed(prev => {
-      const next = !prev;
-      try { localStorage.setItem('settings-sidebar-collapsed', String(next)); } catch { /* ignore */ }
-      return next;
-    });
-  };
   const [tab, setTab] = useState<SettingsTab>('system');
 
   // ── 系统设置字段 ───────────────────────────────────────────────────
@@ -197,36 +218,161 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
   const [customDockerMirror, setCustomDockerMirror] = useState<string>('');
   const [installVolume, setInstallVolume] = useState<number>(0);
   const [volumeOptions, setVolumeOptions] = useState<VolumeOption[]>([]);
+  // FPK 下载目录 + 已下载列表（设置页展示，可同步刷新）
+  const [downloadDir, setDownloadDir] = useState<string>('');
+  const [fpkFiles, setFpkFiles] = useState<FpkDownloadFile[]>([]);
+  const [fpkDir, setFpkDir] = useState<string>('');
+  const [fpkLoading, setFpkLoading] = useState(false);
+  const [fpkRemoving, setFpkRemoving] = useState<string | null>(null);
+  // 已下载列表折叠（本地持久化）
+  const [fpkListCollapsed, setFpkListCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem('fpk-list-collapsed') === '1'; } catch { return false; }
+  });
+  const toggleFpkList = () => {
+    setFpkListCollapsed((v) => {
+      try { localStorage.setItem('fpk-list-collapsed', v ? '0' : '1'); } catch { /* ignore */ }
+      return !v;
+    });
+  };
+  // 直接安装某个已下载 FPK（SSE 进度）
+  const [fpkInstalling, setFpkInstalling] = useState<string | null>(null);
+  const [fpkInstallMsg, setFpkInstallMsg] = useState<string>('');
   const [storeInfo, setStoreInfo] = useState<StoreUpdateInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // 官方应用中心直连（面板账号）
   const [panelEnabled, setPanelEnabled] = useState(false);
-  const [panelUsername, setPanelUsername] = useState('');
+  // 默认预填 fnos：绝大多数机器面板账号即 fnos，加载设置后若有已存值会覆盖
+  const [panelUsername, setPanelUsername] = useState('fnos');
   const [panelPassword, setPanelPassword] = useState('');
   const [panelBaseURL, setPanelBaseURL] = useState('');
   const [panelHasPassword, setPanelHasPassword] = useState(false);
   const [panelTesting, setPanelTesting] = useState(false);
+  // 高级折叠（面板地址）：默认收起，只有面板不在本机/改端口才需要
+  const [panelAdvancedOpen, setPanelAdvancedOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('panel-advanced-open') === 'true';
+    } catch { return false; }
+  });
+  const togglePanelAdvanced = () => {
+    setPanelAdvancedOpen(prev => {
+      const next = !prev;
+      try { localStorage.setItem('panel-advanced-open', String(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
   // 密码框是否被用户动过（API 不回传密码，未动过=保持原值，不能发 clear）
   const panelPasswordDirtyRef = useRef(false);
+
+  // FPK 下载列表（打开设置/保存目录后同步刷新）
+  const loadFpkFiles = useCallback(async () => {
+    setFpkLoading(true);
+    try {
+      const res = await fetchFpkDownloads();
+      setFpkFiles(res.files || []);
+      setFpkDir(res.dir || '');
+    } catch { /* 目录不存在等场景：显示空列表 */ }
+    finally { setFpkLoading(false); }
+  }, []);
+  const handleFpkRemove = async (name: string) => {
+    if (fpkRemoving) return;
+    setFpkRemoving(name);
+    try {
+      await deleteFpkDownload(name);
+      setFpkFiles((prev) => prev.filter((f) => f.name !== name));
+      toast.success(`已删除 ${name}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '删除失败');
+    } finally {
+      setFpkRemoving(null);
+    }
+  };
+  // 手动刷新已下载列表（带 toast 反馈，避免"点了没反应"的观感）
+  const handleFpkRefresh = async () => {
+    if (fpkLoading) return;
+    setFpkLoading(true);
+    try {
+      const res = await fetchFpkDownloads();
+      const files = res.files || [];
+      setFpkFiles(files);
+      setFpkDir(res.dir || '');
+      toast.success(`已刷新：${files.length} 个 FPK`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '刷新失败');
+    } finally {
+      setFpkLoading(false);
+    }
+  };
+  // 直接安装已下载的 FPK（走 SSE 进度；文件保留在缓存中）
+  const handleFpkInstall = (name: string) => {
+    if (fpkInstalling) return;
+    setFpkInstalling(name);
+    setFpkInstallMsg('准备安装...');
+    installFpkDownload(name, (ev) => {
+      if (ev.step === 'error' || ev.error) return;
+      if (ev.message) setFpkInstallMsg(ev.message);
+    }).promise
+      .then(() => {
+        toast.success(`已安装 ${name}`);
+        onCatalogChanged?.();
+        loadFpkFiles();
+      })
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : '安装失败';
+        toast.error(msg);
+      })
+      .finally(() => {
+        setFpkInstalling(null);
+        setFpkInstallMsg('');
+      });
+  };
 
   // 加速源健康监测（智能监测 + 自动切换提示）
   const [mirrorHealth, setMirrorHealth] = useState<MirrorHealth | null>(null);
   const [healthRefreshing, setHealthRefreshing] = useState(false);
+  // 手动测速：触发后立即轮询 last_probe，等探测真正完成再给汇总 toast
+  // （避免"点了没反应"的观感——旧实现 4s 后就停，探测往往还没跑完）。
+  const runManualSpeedTest = useCallback(async (
+    label: string,
+    fetchFn: (refresh?: boolean) => Promise<MirrorHealth>,
+    apply: (h: MirrorHealth) => void,
+  ) => {
+    const before = await fetchFn();
+    apply(before);
+    const probeAge = before.last_probe ? Date.now() - new Date(before.last_probe).getTime() : Number.POSITIVE_INFINITY;
+    const summarize = (h: MirrorHealth) => {
+      const ok = (h.mirrors || []).filter((m) => m.status === 'ok').length;
+      const fail = (h.mirrors || []).filter((m) => m.status === 'fail').length;
+      return `${ok} 个正常${fail > 0 ? `，${fail} 个失败` : ''}`;
+    };
+    if (Number.isFinite(probeAge) && probeAge < 60000) {
+      toast.success(`${label}：${summarize(before)}（${Math.max(1, Math.round(probeAge / 1000))} 秒前刚测过）`);
+      return;
+    }
+    await fetchFn(true); // ?refresh=1 触发后台立即探测
+    const deadline = Date.now() + 45000;
+    let latest = before;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        latest = await fetchFn();
+        apply(latest);
+      } catch { break; }
+      if (latest.last_probe && latest.last_probe !== before.last_probe) break;
+    }
+    toast.success(`${label}完成：${summarize(latest)}`);
+  }, []);
   const refreshHealth = useCallback(async () => {
     setHealthRefreshing(true);
     try {
-      // ?refresh=1 触发后台立即探测（30s 防抖）
-      setMirrorHealth(await fetchMirrorHealth(true));
-      // 探测需数秒完成，稍后重取一次拿到新结果
-      setTimeout(async () => {
-        try { setMirrorHealth(await fetchMirrorHealth()); } catch { /* ignore */ }
-      }, 4000);
-    } catch { /* ignore */ } finally {
+      await runManualSpeedTest('GitHub 测速', fetchMirrorHealth, setMirrorHealth);
+    } catch {
+      toast.error('GitHub 测速失败，请稍后再试');
+    } finally {
       setHealthRefreshing(false);
     }
-  }, []);
+  }, [runManualSpeedTest]);
   useEffect(() => {
     if (!open || tab !== 'system') return;
     let cancelled = false;
@@ -248,16 +394,14 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
   const refreshDkHealth = useCallback(async () => {
     setDkHealthRefreshing(true);
     try {
-      // ?refresh=1 触发后台立即探测（30s 防抖，GitHub/Docker 一起探）
-      setDockerMirrorHealth(await fetchDockerMirrorHealth(true));
-      // 探测需数秒完成，稍后重取一次拿到新结果
-      setTimeout(async () => {
-        try { setDockerMirrorHealth(await fetchDockerMirrorHealth()); } catch { /* ignore */ }
-      }, 4000);
-    } catch { /* ignore */ } finally {
+      // ?refresh=1 触发后台立即探测（GitHub/Docker 一起探，last_probe 同款轮询）
+      await runManualSpeedTest('Docker 测速', fetchDockerMirrorHealth, setDockerMirrorHealth);
+    } catch {
+      toast.error('Docker 测速失败，请稍后再试');
+    } finally {
       setDkHealthRefreshing(false);
     }
-  }, []);
+  }, [runManualSpeedTest]);
   useEffect(() => {
     if (!open || tab !== 'system') return;
     let cancelled = false;
@@ -311,8 +455,9 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
         setCustomDockerMirror(settings.custom_docker_mirror || '');
         setInstallVolume(settings.install_volume || 0);
         setVolumeOptions(settings.volume_options || []);
+        setDownloadDir(settings.download_dir || '');
         setPanelEnabled(!!settings.panel_enabled);
-        setPanelUsername(settings.panel_username || '');
+        setPanelUsername(settings.panel_username || 'fnos');
         setPanelBaseURL(settings.panel_base_url || '');
         setPanelHasPassword(!!settings.panel_has_password);
         setPanelPassword('');
@@ -329,8 +474,9 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
       }
     };
     loadData();
+    loadFpkFiles();
     return () => { cancelled = true; };
-  }, [open]);
+  }, [open, loadFpkFiles]);
 
   const handleGhSpeedTest = async () => {
     setGhChecking(true);
@@ -409,6 +555,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
         custom_github_mirror: customGithubMirror || undefined,
         custom_docker_mirror: customDockerMirror || undefined,
         install_volume: installVolume,
+        download_dir: downloadDir,
         panel_enabled: panelEnabled,
         panel_username: panelUsername,
         panel_password: panelPassword || undefined,
@@ -417,6 +564,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
         panel_clear_password: panelPasswordDirtyRef.current && panelPassword === '',
       });
       toast.success('设置已保存');
+      loadFpkFiles();
       onOpenChange(false);
     } catch (error) {
       console.error('Failed to save settings:', error);
@@ -454,50 +602,32 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
           <DialogTitle className="text-[15px] font-semibold tracking-tight">设置</DialogTitle>
         </div>
 
-        <div className="flex-1 min-h-0 flex">
-          {/* 页内左侧栏：系统设置 / 应用源设置 两 tab + 展开收起按钮 */}
-          <div className={cn(
-            "shrink-0 border-r border-border/50 bg-card/40 flex flex-col overflow-hidden transition-all duration-300",
-            sidebarCollapsed ? "w-[68px]" : "w-36 sm:w-56"
-          )}>
-            <div className={cn("p-2 flex items-center shrink-0", sidebarCollapsed ? "justify-center" : "justify-start pl-4")}>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={toggleSidebar}
-                aria-label={sidebarCollapsed ? '展开菜单' : '收起菜单'}
-                title={sidebarCollapsed ? '展开菜单' : '收起菜单'}
-              >
-                {sidebarCollapsed
-                  ? <ChevronsRight className="h-4 w-4" />
-                  : <ChevronsLeft className="h-4 w-4" />}
-              </Button>
-            </div>
-            <nav className="flex-1 space-y-1 px-2 pb-4">
+        <div className="flex-1 min-h-0 flex flex-col">
+          {/* 顶部 tab：系统设置 / 应用源设置（分段控件，不占侧边空间，内容区全宽） */}
+          <div className="shrink-0 px-4 sm:px-6 pt-3">
+            <div className="inline-flex rounded-xl bg-muted/60 p-1" role="tablist">
               {TABS.map(({ key, label, icon: Icon }) => (
                 <button
                   key={key}
+                  role="tab"
+                  aria-selected={tab === key}
                   onClick={() => setTab(key)}
                   className={cn(
-                    "w-full h-10 rounded-lg flex items-center text-[13px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-                    sidebarCollapsed ? "justify-center px-0" : "justify-start px-3",
-                    tab === key ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-muted"
+                    "h-8 rounded-lg px-4 flex items-center gap-1.5 text-[13px] font-medium transition-colors focus:outline-none",
+                    tab === key
+                      ? "bg-card text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
                   )}
-                  aria-label={label}
-                  title={label}
                 >
-                  <Icon className={cn("h-4 w-4 shrink-0", !sidebarCollapsed && "mr-3")} />
-                  {!sidebarCollapsed && (
-                    <span className="flex-1 text-left whitespace-nowrap">{label}</span>
-                  )}
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
                 </button>
               ))}
-            </nav>
+            </div>
           </div>
 
           {/* 内容区 */}
-          <div className="flex-1 min-w-0 overflow-y-auto">
+          <div className="flex-1 min-h-0 min-w-0 overflow-y-auto pt-3">
             {tab === 'source' ? (
               <div className="px-4 py-4 sm:px-6 sm:py-5">
                 <SourceManager onCatalogChanged={onCatalogChanged} />
@@ -564,6 +694,120 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                       </div>
                     </>
                   )}
+
+                </div>
+
+                {/* FPK 下载目录 + 已下载列表（独立卡片，不与常规设置混在一起） */}
+                <div className="bg-card rounded-[18px] border border-border/20 shadow-appstore px-4 py-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-sm font-medium leading-none flex items-center gap-1.5">
+                        <FolderDown className="h-3.5 w-3.5 text-muted-foreground" />
+                        FPK 下载目录
+                      </label>
+                      {/* 顺序与 GitHub/Docker 加速源健康面板一致：刷新在前、折叠在后 */}
+                      <div className="flex items-center gap-0.5">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          onClick={handleFpkRefresh}
+                          disabled={fpkLoading}
+                          title="刷新已下载 FPK 列表"
+                          aria-label="刷新已下载列表"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${fpkLoading ? 'animate-spin text-primary' : ''}`} />
+                        </Button>
+                        {fpkFiles.length > 0 && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            onClick={toggleFpkList}
+                            title={fpkListCollapsed ? '展开已下载列表' : '折叠已下载列表'}
+                            aria-label={fpkListCollapsed ? '展开已下载列表' : '折叠已下载列表'}
+                          >
+                            <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", fpkListCollapsed && "-rotate-90")} />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    <Input
+                      value={downloadDir}
+                      onChange={(e) => setDownloadDir(e.target.value)}
+                      placeholder="留空使用系统默认目录"
+                      className="h-9 text-xs font-mono"
+                    />
+                    {fpkDir && (
+                      <p className="truncate font-mono text-[11px] text-muted-foreground" title={fpkDir}>
+                        当前生效：{fpkDir}
+                      </p>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      安装/更新与「下载 fpk」的 FPK 都缓存在此目录，已下载列表可在这里查看与管理
+                    </p>
+                    {fpkFiles.length > 0 && (fpkListCollapsed ? (
+                      <button
+                        type="button"
+                        onClick={toggleFpkList}
+                        className="w-full rounded-lg border border-border/40 px-3 py-2 text-left text-[11px] text-muted-foreground hover:text-foreground"
+                      >
+                        已下载 {fpkFiles.length} 个 FPK · 点击展开
+                      </button>
+                    ) : (
+                      <div className="max-h-44 overflow-y-auto rounded-lg border border-border/40 divide-y divide-border/40">
+                        {fpkFiles.map((f) => (
+                          <div key={f.name} className="flex items-center gap-2 px-3 py-1.5">
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-xs font-medium" title={f.name}>
+                                {f.name}
+                              </div>
+                              <div className="text-[11px] text-muted-foreground">
+                                {fpkInstalling === f.name && fpkInstallMsg
+                                  ? <span className="text-primary">{fpkInstallMsg}</span>
+                                  : `${formatBytes(f.size)} · ${f.mod_at ? new Date(f.mod_at).toLocaleString() : ''}`
+                                }
+                              </div>
+                            </div>
+                            {fpkInstalling === f.name ? (
+                              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+                            ) : f.installed ? (
+                              <span
+                                className="shrink-0 rounded-full bg-muted/80 px-2 h-6 inline-flex items-center text-[11px] font-medium text-muted-foreground"
+                                title="该应用当前已安装"
+                              >
+                                已安装
+                              </span>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 shrink-0 px-2 text-xs text-primary hover:bg-primary/10"
+                                onClick={() => handleFpkInstall(f.name)}
+                                disabled={!!fpkInstalling}
+                                title="直接安装该 FPK（不重新下载）"
+                              >
+                                安装
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 w-6 shrink-0 p-0 text-muted-foreground hover:text-red-500"
+                              onClick={() => handleFpkRemove(f.name)}
+                              disabled={fpkRemoving === f.name || !!fpkInstalling}
+                              title="删除该 FPK 缓存"
+                              aria-label={`删除 ${f.name}`}
+                            >
+                              {fpkRemoving === f.name
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <Trash2 className="h-3 w-3" />}
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 {/* 下载加速 */}
@@ -630,7 +874,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                       {githubEnabled ? '使用镜像加速从 GitHub 下载应用安装包' : '直接从 GitHub 下载，不使用加速'}
                     </p>
                     <MirrorHealthPanel
-                      title="加速源健康"
+                      title="GitHub 加速源健康"
                       health={mirrorHealth}
                       options={mirrorOptions}
                       customConfigured={customGithubMirror !== ''}
@@ -704,7 +948,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                       {dockerEnabled ? 'Docker 类应用拉取镜像时使用的加速源' : '直接从 Docker Hub 拉取，不使用加速'}
                     </p>
                     <MirrorHealthPanel
-                      title="加速源健康"
+                      title="Docker 加速源健康"
                       health={dockerMirrorHealth}
                       options={dockerMirrorOptions}
                       customConfigured={customDockerMirror !== ''}
@@ -722,7 +966,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                     <Switch checked={panelEnabled} onCheckedChange={setPanelEnabled} />
                   </div>
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    开启后直连本机系统官方应用中心，可浏览并安装全部官方应用（与在系统应用中心安装完全等价，安装前会列出依赖供选择）。
+                    开启后直连本机系统官方应用中心，可浏览并安装全部官方应用。
                   </p>
                   {panelEnabled && (
                     <>
@@ -751,15 +995,26 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                           }}
                         />
                       </div>
-                      <div className="space-y-2">
-                        <label className="text-sm font-medium leading-none">
-                          面板地址（可选）
-                        </label>
-                        <Input
-                          placeholder="留空 = 本机面板（http://127.0.0.1:5666）"
-                          value={panelBaseURL}
-                          onChange={(e) => setPanelBaseURL(e.target.value)}
-                        />
+                      <p className="text-xs text-muted-foreground">
+                        仅浏览/安装官方应用时需要，填写一次自动记住
+                      </p>
+                      <div className="rounded-lg border border-border/30">
+                        <button
+                          onClick={togglePanelAdvanced}
+                          className="w-full flex items-center justify-between px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          <span>高级（面板地址，一般不用填）</span>
+                          <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", panelAdvancedOpen && "rotate-180")} />
+                        </button>
+                        {panelAdvancedOpen && (
+                          <div className="px-3 pb-3 space-y-2">
+                            <Input
+                              placeholder="留空 = 本机面板（http://127.0.0.1:5666）"
+                              value={panelBaseURL}
+                              onChange={(e) => setPanelBaseURL(e.target.value)}
+                            />
+                          </div>
+                        )}
                       </div>
                       <Button
                         variant="outline"
@@ -804,25 +1059,23 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                       </Button>
                     )}
                   </div>
-                  <button
-                    onClick={() => window.open('https://github.com/Blue-Mink/New-Store/issues', '_blank')}
-                    className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
-                  >
-                    <MessageCircle className="h-3.5 w-3.5" />
-                    问题反馈
-                  </button>
                 </div>
 
-                {/* 保存 */}
-                <div className="pt-1">
-                  <Button
-                    className="w-full sm:w-64 rounded-full h-10"
-                    onClick={handleSave}
-                    disabled={saving}
-                  >
-                    {saving && <Loader2 className="-ml-1 mr-2 h-4 w-4 animate-spin" />}
-                    保存
-                  </Button>
+                {/* 保存：底部悬浮 dock（参考 fn-knock FloatingActionDock：
+                    磨砂玻璃圆角条 + 阴影 + safe-area，悬浮在内容上方不挤占布局） */}
+                <div className="sticky bottom-0 z-10 -mx-1 mt-2 px-1 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-2">
+                  <div className="pointer-events-none mx-auto w-full sm:w-72">
+                    <div className="pointer-events-auto rounded-2xl border border-border/40 bg-card/85 p-2 shadow-2xl shadow-black/10 backdrop-blur-xl">
+                      <Button
+                        className="w-full h-10 rounded-xl"
+                        onClick={handleSave}
+                        disabled={saving}
+                      >
+                        {saving && <Loader2 className="-ml-1 mr-2 h-4 w-4 animate-spin" />}
+                        保存
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

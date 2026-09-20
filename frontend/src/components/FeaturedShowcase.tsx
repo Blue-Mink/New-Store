@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import type { AppInfo } from '../api/client';
-import { availableVersionLabel, appDownloadLabel } from '../api/client';
+import { availableVersionLabel, appDownloadLabel, descriptionPlainText } from '../api/client';
 import { cn } from '../lib/utils';
 import { ChevronRight, Flame, Clock } from 'lucide-react';
 
@@ -11,9 +11,9 @@ interface FeaturedShowcaseProps {
 
 const GRADIENTS = ['hero-gradient-1', 'hero-gradient-2', 'hero-gradient-3'];
 
-/** 取应用简介首行作为横幅副标题 */
+/** 取应用简介首行作为横幅副标题（HTML 描述先纯文本化，避免露出标签） */
 const tagline = (app: AppInfo) => {
-  const line = (app.description || '').split('\n').map(s => s.trim()).find(Boolean) || '';
+  const line = descriptionPlainText(app.description || '').split('\n').map(s => s.trim()).find(Boolean) || '';
   return line.length > 40 ? line.slice(0, 40) + '…' : line;
 };
 

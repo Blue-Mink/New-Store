@@ -501,6 +501,11 @@ type Config struct {
 	SourceListURL string `json:"source_list_url,omitempty"`
 	// SourceListDisabled 关闭「自动同步源列表」（旧配置无此字段 = 未关闭 = 自动同步开启）。
 	SourceListDisabled bool `json:"source_list_disabled,omitempty"`
+	// DownloadDir FPK 下载目录（空 = 启动时的 DOWNLOAD_DIR 环境变量默认值）。
+	DownloadDir string `json:"download_dir,omitempty"`
+	// SourceAutoCareDisabled 关闭「应用源自动监测」（连续无应用自动关闭+空源沉底）。
+	// 旧配置无此字段 = 未关闭 = 自动监测开启。
+	SourceAutoCareDisabled bool `json:"source_auto_care_disabled,omitempty"`
 
 	// Panel 是官方应用中心（fnos-official 内置源 + cloud 安装通道）直连配置。
 	// 面板账号=本机 NAS 的 Web 登录账号（daemon 走 localhost 的 WS 登录流程
@@ -516,6 +521,15 @@ type CustomSource struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	URL  string `json:"url"`
+	// Enabled 用指针区分「未设置」（旧配置，视为启用）与显式关闭。
+	Enabled *bool `json:"enabled,omitempty"`
+	// EmptyStreak 连续「抓取失败或 0 应用」的次数；达到阈值自动关闭源。
+	EmptyStreak int `json:"empty_streak,omitempty"`
+}
+
+// IsEnabled 旧配置没有 enabled 字段 → 视为启用。
+func (c CustomSource) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // IsAppIgnored returns true if the given app is in the ignored list.

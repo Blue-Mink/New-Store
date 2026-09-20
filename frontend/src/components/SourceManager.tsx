@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { fetchSources, addSourcesBatch, removeSource, syncSource, syncSourceList, fetchSettings, updateSettings, type SourceEntry } from '../api/client';
+import { fetchSources, addSourcesBatch, removeSource, syncSource, toggleSource, syncSourceList, fetchSettings, updateSettings, type SourceEntry } from '../api/client';
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
-import { Loader2, Plus, Trash2, ExternalLink, Link2, RefreshCw, ListTree } from 'lucide-react'
+import { Loader2, Plus, Trash2, ExternalLink, Link2, RefreshCw, ListTree, ChevronDown, Check, Activity } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
 interface SourceManagerProps {
@@ -18,10 +19,43 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
   const [adding, setAdding] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  // 源列表折叠（本地持久化）
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem('new-store.sources.collapsed') === '1'; } catch { return false; }
+  });
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   // 内置源列表自动同步（列表地址固定用内置/配置值，界面不再暴露输入框）
   const [listAuto, setListAuto] = useState(true);
   const [syncingList, setSyncingList] = useState(false);
   const [savingList, setSavingList] = useState(false);
+  // 应用源自动监测（连续无应用自动关闭 + 空源沉底）
+  const [autoCare, setAutoCare] = useState(true);
+  const [savingCare, setSavingCare] = useState(false);
+  // 点击复制源地址（短暂高亮反馈）
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copyTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleCollapse = () => {
+    setCollapsed((v) => {
+      try { localStorage.setItem('new-store.sources.collapsed', v ? '0' : '1'); } catch { /* ignore */ }
+      return !v;
+    });
+  };
+
+  const handleToggle = async (src: SourceEntry, enabled: boolean) => {
+    if (togglingId === src.id) return;
+    setTogglingId(src.id);
+    try {
+      await toggleSource(src.id, enabled);
+      toast.success(`应用源「${src.name}」已${enabled ? '开启' : '关闭'}`);
+      await load();
+      onCatalogChanged?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '切换应用源状态失败');
+    } finally {
+      setTogglingId(null);
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -39,13 +73,14 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
     fetchSettings()
       .then((s) => {
         setListAuto(!(s.source_list_disabled ?? false));
+        setAutoCare(!(s.source_auto_care_disabled ?? false));
       })
       .catch(() => {});
   }, [load]);
 
   // 保存源列表设置（带上现有设置全量回传，避免覆盖其它配置；
   // 列表地址沿用当前值，界面已不提供修改入口）
-  const persistListSettings = useCallback(async (auto?: boolean) => {
+  const persistListSettings = useCallback(async (auto?: boolean, care?: boolean) => {
     const cur = await fetchSettings();
     await updateSettings({
       check_interval_hours: cur.check_interval_hours,
@@ -56,8 +91,11 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
       install_volume: cur.install_volume,
       source_list_url: cur.source_list_url,
       source_list_disabled: !(auto ?? listAuto),
+      // 全量回传：FPK 下载目录 / 自动监测不能被本组件的保存抹掉
+      download_dir: cur.download_dir,
+      source_auto_care_disabled: !(care ?? autoCare),
     });
-  }, [listAuto]);
+  }, [listAuto, autoCare]);
 
   const handleListAutoChange = async (v: boolean) => {
     setListAuto(v);
@@ -70,6 +108,41 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
     } finally {
       setSavingList(false);
     }
+  };
+
+  const handleCareChange = async (v: boolean) => {
+    setAutoCare(v);
+    setSavingCare(true);
+    try {
+      await persistListSettings(undefined, v);
+      toast.success(v ? '已开启应用源自动监测' : '已关闭应用源自动监测');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '保存设置失败');
+    } finally {
+      setSavingCare(false);
+    }
+  };
+
+  // 点击源地址复制到剪贴板（短暂 ✓ 反馈）
+  const handleCopyUrl = async (src: SourceEntry) => {
+    try {
+      await navigator.clipboard.writeText(src.url);
+    } catch {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = src.url;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch { /* 剪贴板不可用时仅提示 */ }
+    }
+    setCopiedId(src.id);
+    toast.success(`已复制应用源地址：${src.name}`);
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => setCopiedId(null), 2000);
   };
 
   const handleSyncList = async () => {
@@ -167,7 +240,14 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium">应用源</h3>
+        <h3 className="text-sm font-medium">
+          应用源
+          {sources.length > 0 && (
+            <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
+              {sources.length} 个
+            </span>
+          )}
+        </h3>
         <span className="text-[11px] text-muted-foreground">FnDepot V1/V2</span>
       </div>
 
@@ -195,7 +275,44 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
         </p>
       </div>
 
-      {loading ? (
+      {/* 应用源自动监测（连续无应用自动关闭 + 空源沉底；列表折叠也放在这里） */}
+      <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+            <Activity className="h-3.5 w-3.5 text-muted-foreground" />
+            应用源自动监测
+            {sources.length > 0 && (
+              <span className="text-[11px] font-normal text-muted-foreground">
+                {sources.length} 个 · {autoCare ? '监测中' : '已关闭'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            {/* 与加速源健康面板的折叠按钮同款（size=icon h-7 w-7 + ChevronDown 旋转） */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={handleCollapse}
+              title={collapsed ? '展开应用源列表' : '折叠应用源列表'}
+              aria-label={collapsed ? '展开应用源列表' : '折叠应用源列表'}
+            >
+              <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", collapsed && "-rotate-90")} />
+            </Button>
+            <Switch
+              checked={autoCare}
+              onCheckedChange={handleCareChange}
+              disabled={savingCare}
+              title="开启后，应用源连续 5 次无应用将自动关闭，空源自动沉底"
+            />
+          </div>
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          持续探测各应用源可用性：连续 5 次无应用将自动关闭该源，空源自动沉底，减少无效抓取。
+        </p>
+      </div>
+
+      {!collapsed && (loading ? (
         <div className="flex justify-center py-3">
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         </div>
@@ -205,14 +322,28 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
         </p>
       ) : (
         <div className="space-y-2">
-          {sources.map((src) => (
-            <div key={src.id} className="flex items-center gap-2 rounded-lg border px-3 py-2">
+          {sources.map((src) => {
+            const isOfficialSrc = src.id === 'fnos-official';
+            const disabled = src.enabled === false;
+            return (
+            <div key={src.id} className={`flex items-center gap-2 rounded-lg border px-3 py-2 transition-opacity ${disabled ? 'opacity-55' : ''}`}>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="truncate text-sm font-medium">{src.name}</span>
                   {src.app_count > 0 && (
                     <Badge variant="secondary" className="h-5 px-1.5 text-[10px] font-normal">
                       {src.app_count} 个应用
+                    </Badge>
+                  )}
+                  {disabled && (
+                    <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal text-muted-foreground">
+                      已关闭
+                    </Badge>
+                  )}
+                  {!disabled && (src.empty_streak ?? 0) > 0 && (
+                    <Badge variant="secondary" className="h-5 px-1.5 text-[10px] font-normal text-amber-500"
+                      title="连续抓取失败或 0 应用；再连续 5 次将自动关闭">
+                      连续 {src.empty_streak} 次无应用
                     </Badge>
                   )}
                   {src.error && (
@@ -222,7 +353,15 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
                   )}
                 </div>
                 <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <span className="truncate">{src.url}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyUrl(src)}
+                    className="min-w-0 flex-1 cursor-pointer truncate text-left hover:text-foreground hover:underline"
+                    title="点击复制应用源地址"
+                  >
+                    {src.url}
+                  </button>
+                  {copiedId === src.id && <Check className="h-3 w-3 shrink-0 text-primary" />}
                   {src.homepage && (
                     <a
                       href={src.homepage}
@@ -239,6 +378,15 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
                   <div className="mt-0.5 truncate text-[11px] text-red-500">{src.error}</div>
                 )}
               </div>
+              {/* 开启/关闭（苹果设置同款开关；官方源由「系统设置→官方应用中心」控制） */}
+              <Switch
+                checked={!disabled}
+                onCheckedChange={(v) => handleToggle(src, v)}
+                disabled={isOfficialSrc || togglingId === src.id}
+                title={isOfficialSrc
+                  ? '官方应用中心在「系统设置 → 官方应用中心」开关控制'
+                  : (disabled ? '开启该应用源（恢复抓取）' : '关闭该应用源（停止抓取，已装应用不受影响）')}
+              />
               {/* 手动同步（圆形箭头，同步中转圈） */}
               <Button
                 variant="ghost"
@@ -265,9 +413,10 @@ const SourceManager: React.FC<SourceManagerProps> = ({ onCatalogChanged }) => {
                 )}
               </Button>
             </div>
-          ))}
+            );
+          })}
         </div>
-      )}
+      ))}
 
       <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
         <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">

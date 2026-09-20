@@ -11,6 +11,7 @@ import (
 
 	"fnos-store/internal/core"
 	"fnos-store/internal/panel"
+	"fnos-store/internal/platform"
 	"fnos-store/internal/source"
 )
 
@@ -139,7 +140,10 @@ func (s *Server) defaultPanelVolume() int {
 }
 
 // runPanelInstall 执行官方 cloud 安装（含依赖自动安装）。
-func (s *Server) runPanelInstall(ctx context.Context, stream *sseStream, opName string, app core.AppInfo, pparams panelInstallParams) {
+// wizardParams 是用户在向导弹窗里填写的主应用安装参数（无向导的应用为空）；
+// 依赖的向导字段按 install/info 的 initValue 自动填充，必填且无默认值的
+// 依赖会明确报错（暂不支持对依赖弹向导）。
+func (s *Server) runPanelInstall(ctx context.Context, stream *sseStream, opName string, app core.AppInfo, pparams panelInstallParams, wizardParams []platform.WizardParam) {
 	client := s.panelClient
 	volume := pparams.VolumeID
 	if volume <= 0 {
@@ -165,15 +169,20 @@ func (s *Server) runPanelInstall(ctx context.Context, stream *sseStream, opName 
 			_ = stream.sendProgress(progressPayload{Step: "installing", Message: fmt.Sprintf("按你的选择跳过依赖 %s（使用已有同名应用）", dep.Name)})
 			continue
 		}
+		depParams, err := s.autoFillWizardParams(ctx, client, dep.AppName, dep.SourceID, dep.Version)
+		if err != nil {
+			_ = stream.sendError(fmt.Sprintf("依赖 %s: %s", dep.Name, err.Error()))
+			return
+		}
 		_ = stream.sendProgress(progressPayload{Step: "installing", Message: fmt.Sprintf("正在安装依赖 %s v%s ...", dep.Name, dep.Version)})
-		if err := s.panelInstallOne(ctx, stream, client, dep.AppName, dep.SourceID, dep.Version, volume, true); err != nil {
+		if err := s.panelInstallOne(ctx, stream, client, dep.AppName, dep.SourceID, dep.Version, volume, true, depParams); err != nil {
 			_ = stream.sendError(fmt.Sprintf("依赖 %s 安装失败: %s", dep.Name, err.Error()))
 			return
 		}
 	}
 
 	// 2) 主应用
-	if err := s.panelInstallOne(ctx, stream, client, app.AppName, app.PanelSourceID, app.LatestVersion, volume, false); err != nil {
+	if err := s.panelInstallOne(ctx, stream, client, app.AppName, app.PanelSourceID, app.LatestVersion, volume, false, wizardParams); err != nil {
 		_ = stream.sendError(err.Error())
 		return
 	}
@@ -199,7 +208,7 @@ func (s *Server) runPanelInstall(ctx context.Context, stream *sseStream, opName 
 }
 
 // panelInstallOne 单个官方应用的 cloud 下载 + 安装 + 轮询。
-func (s *Server) panelInstallOne(ctx context.Context, stream *sseStream, client *panel.Client, appName, sourceID, version string, volume int, isDep bool) error {
+func (s *Server) panelInstallOne(ctx context.Context, stream *sseStream, client *panel.Client, appName, sourceID, version string, volume int, isDep bool, customParams []platform.WizardParam) error {
 	if sourceID == "" {
 		return fmt.Errorf("缺少面板 sourceID（目录数据可能过期，请点「检查更新」后重试）")
 	}
@@ -248,7 +257,11 @@ func (s *Server) panelInstallOne(ctx context.Context, stream *sseStream, client 
 	}
 
 	_ = stream.sendProgress(progressPayload{Step: "installing", Message: "正在安装..."})
-	taskID, err := client.InstallTask(ctx, appName, version, volume)
+	panelParams := make([]panel.WizardParam, 0, len(customParams))
+	for _, p := range customParams {
+		panelParams = append(panelParams, panel.WizardParam{Key: p.Key, Value: p.Value})
+	}
+	taskID, err := client.InstallTask(ctx, appName, version, volume, panelParams)
 	if err != nil {
 		return fmt.Errorf("提交安装失败: %w", err)
 	}
@@ -292,6 +305,121 @@ func (s *Server) panelInstallOne(ctx context.Context, stream *sseStream, client 
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// panelDownloadPackage 静默执行一次 cloud 下载（无进度上报），供安装向导
+// 预取与依赖准备使用。下载结果留在面板的 appcenter-downloads 缓存里，
+// 随后真正的安装会复用，不产生重复传输。
+func (s *Server) panelDownloadPackage(ctx context.Context, client *panel.Client, appName, sourceID, version string) error {
+	if sourceID == "" {
+		return errors.New("缺少面板 sourceID（目录数据可能过期，请点「检查更新」后重试）")
+	}
+	dlID, err := client.DownloadTask(ctx, appName, sourceID, version, s.defaultPanelVolume())
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(10 * time.Minute)
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			return errors.New("下载超时")
+		}
+		st, err := client.DownloadStatus(ctx, dlID)
+		if err != nil {
+			return err
+		}
+		switch st.Status {
+		case panel.TaskSuccess:
+			return nil
+		case panel.TaskFailed:
+			return fmt.Errorf("下载失败: %s", st.Message)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// preparePanelInstallInfo 下载包后取回向导定义（面板只对已下载的包返回
+// install/info，未下载报 10100）。这是面板通道应用安装向导弹窗的「预取」
+// 步骤，与原生应用中心「先下载再弹向导」的流程一致。
+func (s *Server) preparePanelInstallInfo(ctx context.Context, app core.AppInfo) (*panel.InstallInfo, error) {
+	client := s.panelClient
+	if client == nil || !client.Configured() {
+		return nil, errors.New("官方应用中心未启用：请先在设置里配置面板账号")
+	}
+	if app.PanelSourceID == "" {
+		return nil, errors.New("缺少面板 sourceID（目录数据可能过期，请点「检查更新」后重试）")
+	}
+	if err := s.panelDownloadPackage(ctx, client, app.AppName, app.PanelSourceID, app.LatestVersion); err != nil {
+		return nil, err
+	}
+	return client.InstallInfo(ctx, app.AppName, app.LatestVersion)
+}
+
+// autoFillWizardParams 为依赖应用自动填充向导参数：字段取向导声明的
+// initValue。必填且无默认值的字段会明确报错（暂不对依赖弹向导）。
+func (s *Server) autoFillWizardParams(ctx context.Context, client *panel.Client, appName, sourceID, version string) ([]platform.WizardParam, error) {
+	if err := s.panelDownloadPackage(ctx, client, appName, sourceID, version); err != nil {
+		return nil, fmt.Errorf("下载依赖包失败: %w", err)
+	}
+	info, err := client.InstallInfo(ctx, appName, version)
+	if err != nil {
+		if errors.Is(err, panel.ErrEndpointNotFound) {
+			// Older panel without install/info: proceed without wizard
+			// answers (required-field apps then fail with 19000 on submit,
+			// exactly as before this fix — no worse).
+			return nil, nil
+		}
+		return nil, fmt.Errorf("获取安装信息失败: %w", err)
+	}
+	if !info.WizardInfo.HasWizard || len(info.WizardInfo.WizardContent) == 0 {
+		return nil, nil
+	}
+	var steps []struct {
+		Items []struct {
+			Type      string `json:"type"`
+			Field     string `json:"field"`
+			InitValue string `json:"initValue"`
+			Rules     []struct {
+				Required bool `json:"required"`
+			} `json:"rules"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(info.WizardInfo.WizardContent, &steps); err != nil {
+		return nil, fmt.Errorf("解析向导定义失败: %w", err)
+	}
+	var params []platform.WizardParam
+	var missing []string
+	for _, st := range steps {
+		for _, it := range st.Items {
+			if it.Type == "tips" || it.Field == "" {
+				continue
+			}
+			required := false
+			for _, r := range it.Rules {
+				if r.Required {
+					required = true
+					break
+				}
+			}
+			if it.InitValue == "" {
+				if required {
+					missing = append(missing, it.Field)
+				}
+				continue
+			}
+			params = append(params, platform.WizardParam{Key: it.Field, Value: it.InitValue})
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("以下字段必填且无默认值: %s，请在官方应用中心安装该依赖", strings.Join(missing, "、"))
+	}
+	return params, nil
 }
 
 // verifyPanelInstalled 等 daemon 列表里出现该应用（安装回调有秒级延迟）。

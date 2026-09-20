@@ -167,8 +167,9 @@ func TestTranslateFndepotApp_VersionAndArch(t *testing.T) {
 	if ra.Source != "测试源" {
 		t.Errorf("Source = %q", ra.Source)
 	}
-	if got := ra.Description; got != "演示 应用" {
-		t.Errorf("stripHTML desc = %q", got)
+	// desc 原样保留（允许 HTML，如 QQ 群超链接）；列表侧由前端 descriptionPlainText 纯文本化
+	if got := ra.Description; got != "<p>演示<b>应用</b></p>" {
+		t.Errorf("desc 应原样保留 HTML = %q", got)
 	}
 	if ra.HomepageURL != "https://demo.example.com" {
 		t.Errorf("HomepageURL = %q", ra.HomepageURL)
