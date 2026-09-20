@@ -14,6 +14,11 @@
   <a href="../../issues">反馈问题</a>
 </p>
 
+<p align="center">
+  <img src="docs/screenshot-mobile.png" width="880" alt="移动端三个主界面：发现、全部、详情"/><br/>
+  <b>移动端三屏</b>：发现 · 全部 · 详情——底部 dock 导航，可嵌入飞牛 App
+</p>
+
 本仓库是 fnOS 侧的应用中心本体：一个 Go 单二进制 + 内嵌的 React 前端，以 FPK 装进应用中心后提供独立的 Web 界面。应用内容全部来自社区源（内置目录与可自定义的 FnDepot / GitHub 源），本仓库不打包任何应用本身，上游应用版权归各自作者。
 
 <p align="center">
@@ -24,11 +29,6 @@
 <p align="center">
   <img src="docs/screenshot-all.png" width="880" alt="全部应用：分类筛选 + 卡片网格"/><br/>
   <b>「全部」页</b>：分类筛选 · 搜索 · 卡片网格（PC 4 列 / 移动端自适配）
-</p>
-
-<p align="center">
-  <img src="docs/screenshot-mobile.png" width="880" alt="移动端三个主界面：发现、全部、详情"/><br/>
-  <b>移动端三屏</b>：发现 · 全部 · 详情——底部 dock 导航，可嵌入飞牛 App
 </p>
 
 ---
