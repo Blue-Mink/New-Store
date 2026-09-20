@@ -102,7 +102,8 @@ const FeaturedShowcase: React.FC<FeaturedShowcaseProps> = ({ apps, onDetail }) =
 
   return (
     <div className="space-y-8">
-      {/* 横幅区：首张占两列；3 张时第三张独占整行（桌面端避免单独一格留两空格） */}
+      {/* 横幅区：首张占两列；3 张时第三张占右两列（col-start-2 错位），
+          与首行 [2+1] 镜像成 [1空+2] 的锯齿布局，避免整行拉伸留大片空白 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {featured.map((app, i) => (
           <HeroBanner
@@ -112,7 +113,7 @@ const FeaturedShowcase: React.FC<FeaturedShowcaseProps> = ({ apps, onDetail }) =
             className={cn(
               GRADIENTS[i % GRADIENTS.length],
               i === 0 && 'md:col-span-2',
-              featured.length === 3 && i === 2 && 'md:col-span-3'
+              featured.length === 3 && i === 2 && 'md:col-span-2 md:col-start-2'
             )}
           />
         ))}

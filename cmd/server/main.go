@@ -73,6 +73,7 @@ func main() {
 		Platform:          platform.DetectPlatform(),
 		StoreApp:          storeAppName,
 		StaticFS:          storeassets.WebFS,
+		DataDir:           dataDir,
 	})
 
 	sched := scheduler.New(checkInterval, srv.RefreshRegistry, cacheStore.LastCheckAt)

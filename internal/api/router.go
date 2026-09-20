@@ -11,8 +11,11 @@ import (
 	"fnos-store/internal/scheduler"
 	"fnos-store/internal/source"
 	"io/fs"
+	"log"
 	"net/http"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +33,8 @@ type Server struct {
 	cacheStore        *cache.Store
 	scheduler         *scheduler.Scheduler
 	appsDir           string
+	// assets 是图标/预览/readme 资源的两级缓存（内存+磁盘），见 asset.go。
+	assets            *appAssetStore
 	// appCenterDir 是应用中心的程序目录（/vol1/@appcenter），用于读取
 	// 「fnOS应用中心」来源应用的本地图标（ui/images/icon-*.png）。可空。
 	appCenterDir      string
@@ -160,6 +165,8 @@ type Config struct {
 	Platform          string
 	StoreApp          string
 	StaticFS          fs.FS
+	// DataDir 应用数据目录（@appdata）：资产磁盘缓存落在 <DataDir>/cache/assets/。
+	DataDir string
 }
 
 func NewServer(cfg Config) *Server {
@@ -194,6 +201,25 @@ func NewServer(cfg Config) *Server {
 		refreshDebouncer: &refreshDebouncer{},
 		sourceStatus:     make(map[string]sourceStatusInfo),
 	}
+	// 资产两级缓存：DATA_DIR 可用时磁盘层落 <DataDir>/cache/assets/。
+	// 目录若被平台以其他属主预建（服务进程无权写入）则跳过磁盘层并告警，
+	// 功能不受影响（仅失去重启后的图标缓存）。
+	assetDir := ""
+	if cfg.DataDir != "" {
+		d := filepath.Join(cfg.DataDir, "cache", "assets")
+		if err := os.MkdirAll(d, 0o755); err == nil {
+			probe := filepath.Join(d, ".wprobe")
+			if werr := os.WriteFile(probe, []byte("ok"), 0o644); werr == nil {
+				_ = os.Remove(probe)
+				assetDir = d
+			} else {
+				log.Printf("assets: 磁盘缓存目录不可写（%v），降级为纯内存缓存", werr)
+			}
+		} else {
+			log.Printf("assets: 磁盘缓存目录创建失败（%v），降级为纯内存缓存", err)
+		}
+	}
+	s.assets = newAppAssetStore(assetDir)
 	s.routes()
 	s.rebuildPanelClient()
 	s.rebuildCustomSources()
