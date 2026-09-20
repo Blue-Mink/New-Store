@@ -77,8 +77,10 @@ const MirrorHealthPanel: React.FC<{
 }> = ({ title, health, options, customConfigured, labelOf, refreshing, onRefresh }) => {
   const [collapsed, setCollapsed] = React.useState<boolean>(() => {
     try {
-      return localStorage.getItem(`health-panel-collapsed:${title}`) === 'true';
-    } catch { return false; }
+      // 默认折叠（无持久化记录时）；用户手动展开/折叠后按保存值
+      const v = localStorage.getItem(`health-panel-collapsed:${title}`);
+      return v === null ? true : v === 'true';
+    } catch { return true; }
   });
   const toggleCollapsed = () => {
     setCollapsed(prev => {
@@ -226,7 +228,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
   const [fpkRemoving, setFpkRemoving] = useState<string | null>(null);
   // 已下载列表折叠（本地持久化）
   const [fpkListCollapsed, setFpkListCollapsed] = useState<boolean>(() => {
-    try { return localStorage.getItem('fpk-list-collapsed') === '1'; } catch { return false; }
+    try {
+      // 默认折叠（无持久化记录时）；用户手动展开/折叠后按保存值
+      const v = localStorage.getItem('fpk-list-collapsed');
+      return v === null ? true : v === '1';
+    } catch { return true; }
   });
   const toggleFpkList = () => {
     setFpkListCollapsed((v) => {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppInfo, AppOperation, PanelDetailResponse } from '../api/client';
-import { availableVersionLabel, installedVersionLabel, assetUrl, appWebUrl, fetchPanelDetail, downloadFpk, sourceLabel, effectiveMaintainer, descriptionPlainText } from '../api/client';
+import { availableVersionLabel, installedVersionLabel, assetUrl, appWebUrl, fetchPanelDetail, fetchAppDetail, downloadFpk, sourceLabel, effectiveMaintainer, descriptionPlainText } from '../api/client';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import {
@@ -149,7 +149,21 @@ const sanitizeDescHtml = (html: string): string => {
   }
 };
 
-const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app, open, onOpenChange, onInstall, onUpdate, onIgnoreUpdate, onUnignoreUpdate, onUninstall, operation, onSourceFilter, onAuthorFilter, onDistributorFilter, activeTerms, onOpenApp, onControl, controlling }) => {
+const AppDetailDialog: React.FC<AppDetailDialogProps> = ({ app: propApp, open, onOpenChange, onInstall, onUpdate, onIgnoreUpdate, onUnignoreUpdate, onUninstall, operation, onSourceFilter, onAuthorFilter, onDistributorFilter, activeTerms, onOpenApp, onControl, controlling }) => {
+  // 列表载荷瘦身：changelog/homepage/release_url/sha256 与外部源 icon_url
+  // 不在列表里，打开详情后由 /api/apps/{key} 补齐（LAN 内几 KB 瞬时）。
+  // 接口未回前先以列表条目兜底渲染，回包后无缝升级为完整字段。
+  const [fullApp, setFullApp] = useState<AppInfo | null>(null);
+  useEffect(() => {
+    setFullApp(null);
+    if (!propApp?.key || !open) return;
+    let alive = true;
+    fetchAppDetail(propApp.key)
+      .then(d => { if (alive) setFullApp(d); })
+      .catch(() => { /* 兜底：继续用列表条目 */ });
+    return () => { alive = false; };
+  }, [propApp?.key, open]);
+  const app = fullApp ?? propApp;
   const [readme, setReadme] = useState<string | null>(null);
   const [readmeError, setReadmeError] = useState(false);
   // 官方应用（fnos-official）：列表条目不带描述/截图/发布者，打开详情时

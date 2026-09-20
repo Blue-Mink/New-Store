@@ -1,5 +1,5 @@
 appname         = fnos-apps-store
-version = 1.20.17
+version = 1.20.18
 display_name    = New Store
 platform        = x86
 maintainer      = conversun

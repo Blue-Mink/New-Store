@@ -179,6 +179,18 @@ export const fetchApps = async (): Promise<AppsResponse> => {
   return response.json();
 };
 
+/**
+ * 单应用完整详情。列表载荷为瘦身省略了 changelog/homepage/release_url/
+ * sha256 与外部源 icon_url，详情弹窗打开后调本接口补齐（LAN 内几 KB，瞬时）。
+ */
+export const fetchAppDetail = async (key: string): Promise<AppInfo> => {
+  const response = await fetch(apiUrl(`/api/apps/${encodeURIComponent(key)}`));
+  if (!response.ok) {
+    throw new Error(`Failed to fetch app detail: ${response.statusText}`);
+  }
+  return response.json();
+};
+
 export const fetchRecommended = async (): Promise<RecommendedAppsResponse> => {
   const response = await fetch(apiUrl('/api/recommended'));
   if (!response.ok) {

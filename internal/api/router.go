@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -34,18 +35,18 @@ type Server struct {
 	scheduler         *scheduler.Scheduler
 	appsDir           string
 	// assets 是图标/预览/readme 资源的两级缓存（内存+磁盘），见 asset.go。
-	assets            *appAssetStore
+	assets *appAssetStore
 	// appCenterDir 是应用中心的程序目录（/vol1/@appcenter），用于读取
 	// 「fnOS应用中心」来源应用的本地图标（ui/images/icon-*.png）。可空。
-	appCenterDir      string
-	platform          string
-	storeApp          string
-	staticFS          fs.FS
-	lastCheck         time.Time
-	statusByApp       map[string]string
-	controlByApp      map[string]platform.AppControl
-	webByApp          map[string]platform.WebService
-	recommendedApps   []source.RecommendedApp
+	appCenterDir    string
+	platform        string
+	storeApp        string
+	staticFS        fs.FS
+	lastCheck       time.Time
+	statusByApp     map[string]string
+	controlByApp    map[string]platform.AppControl
+	webByApp        map[string]platform.WebService
+	recommendedApps []source.RecommendedApp
 	// customSources 是用户添加的 FnDepot 外部应用源；sourceStatus 记录
 	// 每个源最近一次抓取的应用数与错误（按源 ID 索引）。
 	customSources []*source.FNDepotSource
@@ -61,8 +62,8 @@ type Server struct {
 	mirrorMon *mirror.Monitor
 	// dockerMirrorMon 是 Docker 镜像加速健康监测器（同构，独立计数）。
 	dockerMirrorMon *mirror.Monitor
-	ctx       context.Context
-	cancel    context.CancelFunc
+	ctx             context.Context
+	cancel          context.CancelFunc
 
 	mu               sync.RWMutex
 	refreshDebouncer *refreshDebouncer
@@ -74,7 +75,26 @@ type Server struct {
 	// officialDetailFetched 记录哪些官方应用已经拉过 app/detail（无论字段
 	// 是否为空），避免面板某字段真为空时每次刷新都重复拉。受 mu 保护。
 	officialDetailFetched map[string]bool
+
+	// appsRespCache 是 /api/apps 的预构建响应缓存（后台缓存）：目录定稿
+	// （refreshRegistry 末尾）时把全量列表 JSON 一次性序列化好，之后每个
+	// 请求直接回传缓存字节（O(1)），不再逐请求重复序列化 781 个应用。
+	// catalogGen（原子）是目录代次：目录/影响列表的配置每次变化 +1，
+	// 缓存 gen 落后即视为失效、按需重建。
+	appsRespCache appsRespCache
+	catalogGen    uint64 // 仅 atomic 访问
 }
+
+// appsRespCache 缓存 /api/apps 的序列化响应。
+type appsRespCache struct {
+	mu   sync.Mutex
+	data []byte
+	etag string
+	gen  uint64
+}
+
+// bumpCatalogGen 目录代次 +1（目录或影响列表载荷的配置变化时调用）。
+func (s *Server) bumpCatalogGen() { atomic.AddUint64(&s.catalogGen, 1) }
 
 type installedNamesCache struct {
 	mu    sync.Mutex
@@ -186,20 +206,20 @@ func NewServer(cfg Config) *Server {
 			configMgr:  cfg.ConfigMgr,
 			cacheStore: cfg.CacheStore,
 		},
-		configMgr:        cfg.ConfigMgr,
-		cacheStore:       cfg.CacheStore,
-		scheduler:        cfg.Scheduler,
-		appsDir:          cfg.AppsDir,
-		appCenterDir:     cfg.AppCenterDir,
-		platform:         cfg.Platform,
-		storeApp:         cfg.StoreApp,
-		staticFS:         cfg.StaticFS,
-		statusByApp:            make(map[string]string),
-		controlByApp:           make(map[string]platform.AppControl),
-		webByApp:               make(map[string]platform.WebService),
-		officialDetailFetched:  make(map[string]bool),
-		refreshDebouncer: &refreshDebouncer{},
-		sourceStatus:     make(map[string]sourceStatusInfo),
+		configMgr:             cfg.ConfigMgr,
+		cacheStore:            cfg.CacheStore,
+		scheduler:             cfg.Scheduler,
+		appsDir:               cfg.AppsDir,
+		appCenterDir:          cfg.AppCenterDir,
+		platform:              cfg.Platform,
+		storeApp:              cfg.StoreApp,
+		staticFS:              cfg.StaticFS,
+		statusByApp:           make(map[string]string),
+		controlByApp:          make(map[string]platform.AppControl),
+		webByApp:              make(map[string]platform.WebService),
+		officialDetailFetched: make(map[string]bool),
+		refreshDebouncer:      &refreshDebouncer{},
+		sourceStatus:          make(map[string]sourceStatusInfo),
 	}
 	// 资产两级缓存：DATA_DIR 可用时磁盘层落 <DataDir>/cache/assets/。
 	// 目录若被平台以其他属主预建（服务进程无权写入）则跳过磁盘层并告警，
@@ -229,6 +249,8 @@ func NewServer(cfg Config) *Server {
 	// SSE/轮询自然补齐。scheduler 的即时首查由 lastCheck 防重。
 	go s.refreshRecommended(context.Background())
 	go s.refreshRegistry(context.Background())
+	// 外部源图标后台预热（FNDepot 式：页面打开前图标已落本地缓存）
+	go s.startIconWarmLoop()
 	return s
 }
 
@@ -237,6 +259,7 @@ func (s *Server) routes() {
 	// 内网端口（默认 8011 仅 LAN 可达），无需鉴权但仅限本机/局域网。
 	s.mountPprof()
 	s.Mux.HandleFunc("GET /api/apps", s.handleListApps)
+	s.Mux.HandleFunc("GET /api/apps/{appname}", s.handleGetApp)
 	s.Mux.HandleFunc("GET /api/recommended", s.handleListRecommended)
 	s.Mux.HandleFunc("POST /api/apps/{appname}/install", s.handleInstall)
 	s.Mux.HandleFunc("POST /api/apps/{appname}/update", s.handleUpdate)
