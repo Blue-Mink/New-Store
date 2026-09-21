@@ -29,7 +29,10 @@ type Server struct {
 	recommendedSource *source.RecommendedSource
 	registry          *core.Registry
 	queue             *OperationQueue
-	pipeline          *installPipeline
+	// tasks 是后台操作任务管理器：安装/更新/下载解耦到服务端后台 goroutine，
+	// 客户端断开（退出应用）后继续跑，进度可轮询/持久化。见 task.go。
+	tasks    *TaskManager
+	pipeline *installPipeline
 	configMgr         *config.Manager
 	cacheStore        *cache.Store
 	scheduler         *scheduler.Scheduler
@@ -67,6 +70,9 @@ type Server struct {
 
 	mu               sync.RWMutex
 	refreshDebouncer *refreshDebouncer
+
+	// autoUpdateMu 防止自动更新周期重叠（TryLock 抢占，已在跑则跳过本轮）。
+	autoUpdateMu sync.Mutex
 
 	// installedNamesCache 已安装应用小缓存（appname 小写 → 版本），供
 	// 「FPK 下载列表显示已安装」等高频查询；60s TTL，安装操作后 force 刷新。
@@ -240,6 +246,12 @@ func NewServer(cfg Config) *Server {
 		}
 	}
 	s.assets = newAppAssetStore(assetDir)
+	// 后台任务持久化：DATA_DIR 可用时落 <DataDir>/tasks.json（进度跨重启保留）。
+	if cfg.DataDir != "" {
+		s.tasks = NewTaskManager(filepath.Join(cfg.DataDir, "tasks.json"))
+	} else {
+		s.tasks = NewTaskManager("")
+	}
 	s.routes()
 	s.rebuildPanelClient()
 	s.rebuildCustomSources()
@@ -268,6 +280,12 @@ func (s *Server) routes() {
 	s.Mux.HandleFunc("POST /api/apps/{appname}/stop", func(w http.ResponseWriter, r *http.Request) { s.handleStartStop(w, r, "stop") })
 	s.Mux.HandleFunc("GET /api/apps/{appname}/download", s.handleDownloadFpk)
 	s.Mux.HandleFunc("POST /api/apps/{appname}/download-task", s.handleDownloadTask)
+	s.Mux.HandleFunc("POST /api/apps/{appname}/task/pause", s.handlePauseDownload)
+	s.Mux.HandleFunc("POST /api/apps/{appname}/task/resume", s.handleResumeDownload)
+	// 后台任务状态：客户端（退出应用后重开）轮询它看安装/更新进度。
+	s.Mux.HandleFunc("GET /api/apps/{appname}/task", s.handleGetTask)
+	// 全部进行中后台任务：UI 全局进度指示轮询它（退出应用重开也能看到）。
+	s.Mux.HandleFunc("GET /api/tasks", s.handleListTasks)
 	s.Mux.HandleFunc("GET /api/fpk-downloads", s.handleListFpkDownloads)
 	s.Mux.HandleFunc("DELETE /api/fpk-downloads/{name}", s.handleDeleteFpkDownload)
 	s.Mux.HandleFunc("POST /api/fpk-downloads/{name}/install", s.handleInstallFpkDownload)

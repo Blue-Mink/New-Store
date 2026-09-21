@@ -76,7 +76,14 @@ func main() {
 		DataDir:           dataDir,
 	})
 
-	sched := scheduler.New(checkInterval, srv.RefreshRegistry, cacheStore.LastCheckAt)
+	// 周期检查：刷新注册表（检测更新）后，若开启自动更新则后台自动安装。
+	sched := scheduler.New(checkInterval, func(ctx context.Context) error {
+		if err := srv.RefreshRegistry(ctx); err != nil {
+			return err
+		}
+		srv.AutoUpdateIfEnabled()
+		return nil
+	}, cacheStore.LastCheckAt)
 	srv.SetScheduler(sched)
 
 	ctx, cancel := context.WithCancel(context.Background())

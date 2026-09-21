@@ -7,6 +7,7 @@ import { Badge } from './components/ui/badge';
 import AppList from './components/AppList';
 import AppIcon from './components/AppIcon';
 import ProgressOverlay from './components/ProgressOverlay';
+import BackgroundTasksIndicator from './components/BackgroundTasksIndicator';
 import RecommendedAppCard from './components/RecommendedAppCard';
 import FeaturedShowcase from './components/FeaturedShowcase';
 // 重型对话框懒加载：首屏 bundle 只保留列表/导航核心，设置页(1089行)/详情
@@ -1450,7 +1451,10 @@ const App: React.FC = () => {
           total={selfUpdateState.total}
         />
       )}
-      
+
+      {/* 后台任务进度（退出应用后继续跑的安装/更新，轮询展示） */}
+      <BackgroundTasksIndicator />
+
       <Suspense fallback={null}>
         <SettingsPage
           open={settingsVisible}

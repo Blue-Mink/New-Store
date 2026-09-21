@@ -511,6 +511,10 @@ type Config struct {
 	// 旧配置无此字段 = 未关闭 = 自动监测开启。
 	SourceAutoCareDisabled bool `json:"source_auto_care_disabled,omitempty"`
 
+	// AutoUpdate 开启后，周期检查发现可用更新时自动在后台安装（无需打开应用）。
+	// 排除：已忽略更新的应用、商店自身（自更新保持手动）、官方应用（走官方中心）。
+	AutoUpdate bool `json:"auto_update,omitempty"`
+
 	// Panel 是官方应用中心（fnos-official 内置源 + cloud 安装通道）直连配置。
 	// 面板账号=本机 NAS 的 Web 登录账号（daemon 走 localhost 的 WS 登录流程
 	// 换 ost 会话 cookie，密码只存本机应用数据目录，不出网）。
